@@ -1,0 +1,25 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: loyalty-service
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  database:
+    url: ${DATABASE_URL:}
+    pool-max-size: ${DB_POOL_MAX_SIZE:10}
+    migrate-on-startup: ${DB_MIGRATE_ON_STARTUP:true}

@@ -1,0 +1,11 @@
+# Base local para desarrollo: docker compose up -d
+# DATABASE_URL=postgresql://loyalty:loyalty@localhost:5433/loyalty?sslmode=disable ./gradlew bootRun
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: loyalty
+      POSTGRES_PASSWORD: loyalty
+      POSTGRES_DB: loyalty
+    ports:
+      - "5433:5432"
