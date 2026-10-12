@@ -1,0 +1,165 @@
+package com.axioma.loyalty.application;
+
+import static com.axioma.loyalty.application.AdminFixtures.TENANT_ID;
+import static com.axioma.loyalty.application.AdminFixtures.USER_ID;
+import static com.axioma.loyalty.application.AdminFixtures.hasCode;
+import static com.axioma.loyalty.application.AdminFixtures.tenant;
+import static com.axioma.loyalty.application.AdminFixtures.user;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+import com.axioma.loyalty.application.command.CreateTenantCommand;
+import com.axioma.loyalty.application.command.CreateUserCommand;
+import com.axioma.loyalty.application.command.DeactivateUserCommand;
+import com.axioma.loyalty.application.command.ResetPasswordCommand;
+import com.axioma.loyalty.application.handler.ActiveTenantGuard;
+import com.axioma.loyalty.application.handler.CreateTenantHandler;
+import com.axioma.loyalty.application.handler.CreateUserHandler;
+import com.axioma.loyalty.application.handler.DeactivateUserHandler;
+import com.axioma.loyalty.application.handler.ResetPasswordHandler;
+import com.axioma.loyalty.application.validator.CreateTenantValidator;
+import com.axioma.loyalty.application.validator.CreateUserValidator;
+import com.axioma.loyalty.application.validator.PasswordPolicy;
+import com.axioma.loyalty.application.validator.ResetPasswordValidator;
+import com.axioma.loyalty.config.SecurityProperties;
+import com.axioma.loyalty.domain.model.TenantChanged;
+import com.axioma.loyalty.domain.model.UserAccount;
+import com.axioma.loyalty.domain.model.UserRole;
+import com.axioma.loyalty.domain.model.error.ErrorCode;
+import com.axioma.loyalty.domain.model.error.LoyaltyException;
+import com.axioma.loyalty.domain.port.out.PasswordHasher;
+import com.axioma.loyalty.domain.port.out.SessionRevoker;
+import com.axioma.loyalty.domain.port.out.TenantEventOutbox;
+import com.axioma.loyalty.domain.port.out.TenantRepository;
+import com.axioma.loyalty.domain.port.out.UserRepository;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
+
+class AdminHandlersTest {
+
+    private final TenantRepository tenants = mock(TenantRepository.class);
+    private final UserRepository users = mock(UserRepository.class);
+    private final TenantEventOutbox outbox = mock(TenantEventOutbox.class);
+    private final PasswordHasher hasher = mock(PasswordHasher.class);
+    private final SessionRevoker sessions = mock(SessionRevoker.class);
+    private final PasswordPolicy policy = new PasswordPolicy(new SecurityProperties(8, 4));
+    private final ActiveTenantGuard guard = new ActiveTenantGuard(tenants);
+
+    private final CreateTenantHandler createTenant =
+            new CreateTenantHandler(new CreateTenantValidator(), tenants, outbox);
+    private final CreateUserHandler createUser =
+            new CreateUserHandler(new CreateUserValidator(policy), guard, hasher, users);
+    private final DeactivateUserHandler deactivate = new DeactivateUserHandler(guard, users, sessions);
+    private final ResetPasswordHandler reset =
+            new ResetPasswordHandler(new ResetPasswordValidator(policy), guard, hasher, users, sessions);
+
+    @Test
+    void createTenantWritesTenantChangedEvent() {
+        when(tenants.create(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(outbox.append(any())).thenReturn(Mono.empty());
+
+        var command = new CreateTenantCommand("mi-cafe", "Mi Café", null, "#112233", 10, "Café gratis", null, null);
+        StepVerifier.create(createTenant.handle(command))
+                .assertNext(tenant -> {
+                    assertThat(tenant.slug().value()).isEqualTo("mi-cafe");
+                    assertThat(tenant.undoWindowSeconds()).isEqualTo(300);
+                    assertThat(tenant.active()).isTrue();
+                })
+                .verifyComplete();
+
+        var event = ArgumentCaptor.forClass(TenantChanged.class);
+        verify(outbox).append(event.capture());
+        assertThat(event.getValue().slug()).isEqualTo("mi-cafe");
+        assertThat(event.getValue().pointsGoal()).isEqualTo(10);
+    }
+
+    @Test
+    void createTenantDoesNotWriteEventWhenSlugIsTaken() {
+        when(tenants.create(any())).thenReturn(Mono.error(new LoyaltyException(ErrorCode.SLUG_ALREADY_EXISTS)));
+
+        var command = new CreateTenantCommand("mi-cafe", "Mi Café", null, null, 10, "Café gratis", null, null);
+        StepVerifier.create(createTenant.handle(command))
+                .expectErrorSatisfies(hasCode(ErrorCode.SLUG_ALREADY_EXISTS)).verify();
+        verifyNoInteractions(outbox);
+    }
+
+    @Test
+    void createUserHashesPassword() {
+        when(tenants.findById(TENANT_ID)).thenReturn(Mono.just(tenant(true)));
+        when(hasher.hash("secreto123")).thenReturn(Mono.just("$2a$hash"));
+        when(users.create(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(createUser.handle(new CreateUserCommand(TENANT_ID, "Ana", " ANA ", "secreto123", "OWNER")))
+                .assertNext(user -> {
+                    assertThat(user.username()).isEqualTo("ana");
+                    assertThat(user.credentialHash()).isEqualTo("$2a$hash");
+                    assertThat(user.role()).isEqualTo(UserRole.OWNER);
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void createUserFailsForInactiveTenantWithoutHashing() {
+        when(tenants.findById(TENANT_ID)).thenReturn(Mono.just(tenant(false)));
+
+        StepVerifier.create(createUser.handle(new CreateUserCommand(TENANT_ID, null, "ana", "secreto123", "OWNER")))
+                .expectErrorSatisfies(hasCode(ErrorCode.TENANT_NOT_FOUND)).verify();
+        verifyNoInteractions(hasher, users);
+    }
+
+    @Test
+    void deactivateMarksInactiveAndRevokesSessions() {
+        when(tenants.findById(TENANT_ID)).thenReturn(Mono.just(tenant(true)));
+        when(users.findById(TENANT_ID, USER_ID)).thenReturn(Mono.just(user()));
+        when(users.update(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(sessions.revokeAllByUser(TENANT_ID, USER_ID)).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(deactivate.handle(new DeactivateUserCommand(TENANT_ID, USER_ID))).verifyComplete();
+
+        var saved = ArgumentCaptor.forClass(UserAccount.class);
+        verify(users).update(saved.capture());
+        assertThat(saved.getValue().active()).isFalse();
+        verify(sessions).revokeAllByUser(TENANT_ID, USER_ID);
+    }
+
+    @Test
+    void deactivateFailsWhenUserIsNotInTenant() {
+        when(tenants.findById(TENANT_ID)).thenReturn(Mono.just(tenant(true)));
+        when(users.findById(TENANT_ID, USER_ID)).thenReturn(Mono.empty());
+
+        StepVerifier.create(deactivate.handle(new DeactivateUserCommand(TENANT_ID, USER_ID)))
+                .expectErrorSatisfies(hasCode(ErrorCode.USER_NOT_FOUND)).verify();
+        verify(users, never()).update(any());
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
+    void resetPasswordStoresNewHashAndRevokesSessions() {
+        when(tenants.findById(TENANT_ID)).thenReturn(Mono.just(tenant(true)));
+        when(users.findById(TENANT_ID, USER_ID)).thenReturn(Mono.just(user()));
+        when(hasher.hash("nuevaClave1")).thenReturn(Mono.just("$2a$nuevo"));
+        when(users.update(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(sessions.revokeAllByUser(TENANT_ID, USER_ID)).thenReturn(Mono.just(1L));
+
+        StepVerifier.create(reset.handle(new ResetPasswordCommand(TENANT_ID, USER_ID, "nuevaClave1"))).verifyComplete();
+
+        var saved = ArgumentCaptor.forClass(UserAccount.class);
+        verify(users).update(saved.capture());
+        assertThat(saved.getValue().credentialHash()).isEqualTo("$2a$nuevo");
+        verify(sessions).revokeAllByUser(TENANT_ID, USER_ID);
+    }
+
+    @Test
+    void resetPasswordRejectsWeakPasswordBeforeTouchingStorage() {
+        StepVerifier.create(reset.handle(new ResetPasswordCommand(TENANT_ID, USER_ID, "corta")))
+                .expectErrorSatisfies(hasCode(ErrorCode.WEAK_PASSWORD)).verify();
+        verifyNoInteractions(tenants, users, hasher, sessions);
+    }
+}

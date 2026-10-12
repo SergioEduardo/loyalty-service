@@ -54,4 +54,30 @@ class PostgresUrlTest {
         assertThatThrownBy(() -> PostgresUrl.parse("postgresql://host.example/db"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void acceptsNeonPsqlCommandCopiedAsSecret() {
+        var url = PostgresUrl.parse(
+                "psql 'postgresql://loyalty_owner:s3cr3t@ep-abc.neon.tech/loyalty?sslmode=require&channel_binding=require'\n");
+
+        assertThat(url.host()).isEqualTo("ep-abc.neon.tech");
+        assertThat(url.password()).isEqualTo("s3cr3t");
+        assertThat(url.sslRequired()).isTrue();
+    }
+
+    @Test
+    void acceptsQuotedUrl() {
+        var url = PostgresUrl.parse("\"postgresql://u:p@host.example/db\"");
+
+        assertThat(url.database()).isEqualTo("db");
+    }
+
+    @Test
+    void malformedUrlErrorIsClearAndDoesNotLeak() {
+        assertThatThrownBy(() -> PostgresUrl.parse("psql 'postgresql://u:top secret@host/db'"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("postgresql://usuario:clave@host/base")
+                .hasMessageNotContaining("top secret")
+                .hasNoCause();
+    }
 }

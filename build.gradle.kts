@@ -17,11 +17,19 @@ repositories {
     mavenCentral()
 }
 
+// 1.21.0 (la que trae Boot 3.5.0) usa una versión de la API de Docker que Docker Engine 29 rechaza,
+// y los IT se omitían en silencio.
+extra["testcontainers.version"] = "1.21.4"
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.postgresql:r2dbc-postgresql")
+
+    // Hash de contraseñas (bcrypt) y validación de ID tokens de Google (API admin)
+    implementation("org.springframework.security:spring-security-crypto")
+    implementation("org.springframework.security:spring-security-oauth2-jose")
 
     // Migraciones (Flyway usa JDBC; la aplicacion usa R2DBC)
     implementation("org.flywaydb:flyway-core")

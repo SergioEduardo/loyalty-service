@@ -1,5 +1,6 @@
 package com.axioma.loyalty.adapter.out.persist.query;
 
+import com.axioma.loyalty.adapter.out.persist.SqlResource;
 import com.axioma.loyalty.domain.model.TenantIdentity;
 import com.axioma.loyalty.domain.port.out.TenantIdentityReader;
 import org.springframework.r2dbc.core.DatabaseClient;

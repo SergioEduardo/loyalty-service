@@ -23,3 +23,9 @@ app:
     url: ${DATABASE_URL:}
     pool-max-size: ${DB_POOL_MAX_SIZE:10}
     migrate-on-startup: ${DB_MIGRATE_ON_STARTUP:true}
+  security:
+    password-min-length: ${PASSWORD_MIN_LENGTH:8}
+    bcrypt-strength: ${BCRYPT_STRENGTH:12}
+  admin:
+    audience: ${ADMIN_AUDIENCE:}
+    allowed-emails: ${ADMIN_ALLOWED_EMAILS:}

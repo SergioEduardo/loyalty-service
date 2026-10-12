@@ -49,5 +49,8 @@ jobs:
           service: ${{ env.SERVICE }}
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE }}
+          env_vars: |
+            ADMIN_AUDIENCE=${{ vars.ADMIN_AUDIENCE }}
+            ADMIN_ALLOWED_EMAILS=${{ vars.ADMIN_ALLOWED_EMAILS }}
           secrets: |
             DATABASE_URL=neon-database-url:latest

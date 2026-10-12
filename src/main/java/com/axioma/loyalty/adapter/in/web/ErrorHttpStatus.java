@@ -10,8 +10,12 @@ final class ErrorHttpStatus {
 
     static HttpStatus of(ErrorCode code) {
         return switch (code) {
-            case INVALID_SLUG, INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
-            case TENANT_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case INVALID_SLUG, INVALID_TEXT, INVALID_BRAND_COLOR, INVALID_SETTINGS, INVALID_USER,
+                 WEAK_PASSWORD, INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
+            case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
+            case FORBIDDEN -> HttpStatus.FORBIDDEN;
+            case TENANT_NOT_FOUND, USER_NOT_FOUND -> HttpStatus.NOT_FOUND;
+            case SLUG_ALREADY_EXISTS, USERNAME_TAKEN -> HttpStatus.CONFLICT;
             case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }
