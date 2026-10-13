@@ -202,7 +202,7 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `REFRESH_TOKEN_TTL_DAYS` | Vigencia de la sesión desde el último refresh | 30 |
 | `LOGIN_MAX_ATTEMPTS` | Fallos por (negocio, usuario) antes de bloquear | 5 |
 | `LOGIN_WINDOW_MINUTES` | Ventana de los fallos y duración del bloqueo | 15 |
-| `APP_WEB_BASE_URL` | URL de la PWA para armar `activationUrl`. Dev: `https://axioma-loyalty-dev-web.web.app`. Sin ella la API admin devuelve solo `token` y `expiresAt` | vacía |
+| `APP_WEB_BASE_URL` | URL de la PWA para armar `activationUrl`. Dev: `https://axioma-loyalty-dev-web.web.app`. La pone el despliegue (`ci.yml`) desde la variable de repositorio `vars.APP_WEB_BASE_URL`. Sin ella la API admin devuelve solo `token` y `expiresAt` | vacía |
 | `ACTIVATION_TOKEN_TTL_HOURS` | Vigencia de un enlace de activación | 72 |
 | `ACTIVATION_MAX_ATTEMPTS_PER_IP` | Fallos de activación por (slug, IP) antes de bloquear | 5 |
 | `ACTIVATION_MAX_ATTEMPTS_PER_SLUG` | Fallos de activación por slug antes de bloquear | 20 |
