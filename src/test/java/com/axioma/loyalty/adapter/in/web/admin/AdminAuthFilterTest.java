@@ -16,7 +16,7 @@ class AdminAuthFilterTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"/api/public/tenants/mi-cafe/identity", "/api/administracion", "/actuator/health", "/"})
+    @ValueSource(strings = {"/api/public/tenants/mi-cafe/identity", "/caja/mi-cafe/manifest.webmanifest", "/api/administracion", "/actuator/health", "/"})
     void ignoresOtherPaths(String path) {
         assertThat(AdminAuthFilter.isAdminPath(PathContainer.parsePath(path))).isFalse();
     }
