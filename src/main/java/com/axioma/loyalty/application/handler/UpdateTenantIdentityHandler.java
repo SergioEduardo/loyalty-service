@@ -14,12 +14,13 @@ public class UpdateTenantIdentityHandler implements Handler<UpdateTenantIdentity
 
     private final UpdateTenantIdentityValidator validator;
     private final TenantChangeWriter tenantChangeWriter;
+    private final OutboxFastPath outboxFastPath;
 
     @Override
     public Mono<TenantProfile> handle(UpdateTenantIdentityCommand command) {
         return validator.validate(command)
                 .then(Mono.defer(() -> tenantChangeWriter.apply(command.tenantId(),
                         tenant -> tenant.withIdentity(command.name(), command.description(), command.brandColor()))))
-                .map(update -> TenantProfile.from(update.after()));
+                .flatMap(update -> outboxFastPath.publish(update.eventId()).thenReturn(TenantProfile.from(update.after())));
     }
 }

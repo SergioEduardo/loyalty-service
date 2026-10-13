@@ -6,5 +6,6 @@ import reactor.core.publisher.Mono;
 /** Avisos pendientes de publicar. Debe llamarse dentro de la transacción del cambio. */
 public interface TenantEventOutbox {
 
-    Mono<Void> append(TenantChanged event);
+    /** Devuelve el id del aviso (su secuencia). */
+    Mono<Long> append(TenantChanged event);
 }

@@ -51,3 +51,12 @@ app:
     max-attempts-per-ip: ${ACTIVATION_MAX_ATTEMPTS_PER_IP:5}
     max-attempts-per-slug: ${ACTIVATION_MAX_ATTEMPTS_PER_SLUG:20}
     window-minutes: ${ACTIVATION_WINDOW_MINUTES:15}
+  outbox:
+    topic: ${PUBSUB_TOPIC:}
+    batch-size: ${OUTBOX_BATCH_SIZE:50}
+    max-attempts: ${OUTBOX_MAX_ATTEMPTS:8}
+    fast-path-timeout-ms: ${OUTBOX_FAST_PATH_TIMEOUT_MS:1000}
+    publish-timeout-ms: ${OUTBOX_PUBLISH_TIMEOUT_MS:10000}
+    claim-lease-seconds: ${OUTBOX_CLAIM_LEASE_SECONDS:120}
+    publish-audience: ${OUTBOX_PUBLISH_AUDIENCE:}
+    publish-allowed-emails: ${OUTBOX_PUBLISH_ALLOWED_EMAILS:}

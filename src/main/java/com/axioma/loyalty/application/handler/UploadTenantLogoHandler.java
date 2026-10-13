@@ -12,7 +12,7 @@ import reactor.core.publisher.Mono;
 
 /**
  * Normaliza el logo, lo sube con un nombre que depende de su contenido, apunta el negocio a él
- * (con su TenantChanged) y al final borra el anterior. La subida va fuera de la transacción para
+ * (con su TenantChanged), publica el aviso (camino rápido) y al final borra el anterior. La subida va fuera de la transacción para
  * no retener la fila bloqueada mientras se habla con Cloud Storage.
  */
 @Service
@@ -24,6 +24,7 @@ public class UploadTenantLogoHandler implements Handler<UploadTenantLogoCommand,
     private final LogoStoragePort logoStorage;
     private final TenantChangeWriter tenantChangeWriter;
     private final LogoCleanup logoCleanup;
+    private final OutboxFastPath outboxFastPath;
 
     @Override
     public Mono<TenantProfile> handle(UploadTenantLogoCommand command) {
@@ -31,6 +32,8 @@ public class UploadTenantLogoHandler implements Handler<UploadTenantLogoCommand,
                 .flatMap(format -> imageNormalizer.normalize(command.content(), format))
                 .flatMap(png -> logoStorage.store(TenantLogo.objectKey(command.tenantId(), png), png))
                 .flatMap(logo -> tenantChangeWriter.apply(command.tenantId(), tenant -> tenant.withLogo(logo)))
-                .flatMap(update -> logoCleanup.deleteReplaced(update).thenReturn(TenantProfile.from(update.after())));
+                .flatMap(update -> outboxFastPath.publish(update.eventId())
+                        .then(Mono.defer(() -> logoCleanup.deleteReplaced(update)))
+                        .thenReturn(TenantProfile.from(update.after())));
     }
 }

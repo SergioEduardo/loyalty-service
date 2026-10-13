@@ -28,6 +28,7 @@ import com.axioma.loyalty.application.handler.CreateUserHandler;
 import com.axioma.loyalty.application.handler.DeactivateUserHandler;
 import com.axioma.loyalty.application.handler.IssueActivationLinkHandler;
 import com.axioma.loyalty.application.handler.ResetPasswordHandler;
+import com.axioma.loyalty.application.handler.TenantCreationWriter;
 import com.axioma.loyalty.application.validator.CreateTenantValidator;
 import com.axioma.loyalty.application.validator.CreateUserValidator;
 import com.axioma.loyalty.application.validator.PasswordPolicy;
@@ -46,6 +47,7 @@ import com.axioma.loyalty.domain.port.out.SessionRevoker;
 import com.axioma.loyalty.domain.port.out.TenantEventOutbox;
 import com.axioma.loyalty.domain.port.out.TenantRepository;
 import com.axioma.loyalty.domain.port.out.UserRepository;
+import com.axioma.loyalty.support.OutboxFixtures;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import java.time.Clock;
@@ -75,7 +77,8 @@ class AdminHandlersTest {
             new ActivationProperties("https://web.example.com/", 72, 5, 20, 15), clock);
 
     private final CreateTenantHandler createTenant =
-            new CreateTenantHandler(new CreateTenantValidator(), tenants, outbox);
+            new CreateTenantHandler(new CreateTenantValidator(), new TenantCreationWriter(tenants, outbox),
+                    OutboxFixtures.disabledFastPath());
     private final CreateUserHandler createUser =
             new CreateUserHandler(new CreateUserValidator(policy), guard, hasher, users, linkIssuer);
     private final DeactivateUserHandler deactivate = new DeactivateUserHandler(guard, users, sessions);
@@ -95,7 +98,7 @@ class AdminHandlersTest {
     @Test
     void createTenantWritesTenantChangedEvent() {
         when(tenants.create(any())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(outbox.append(any())).thenReturn(Mono.empty());
+        when(outbox.append(any())).thenReturn(Mono.just(1L));
 
         var command = new CreateTenantCommand("mi-cafe", "Mi Café", null, "#112233", 10, "Café gratis", null, null);
         StepVerifier.create(createTenant.handle(command))

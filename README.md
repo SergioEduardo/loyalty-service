@@ -12,6 +12,7 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 - Perfil del negocio para el dueño: identidad, configuración del programa y logo (Cloud Storage).
 - Manifest de la PWA de caja por negocio (`/caja/{slug}/manifest.webmanifest`).
 - Activación de cuentas por enlace de un solo uso (la persona elige su contraseña).
+- Publicación de los avisos del outbox en Pub/Sub (camino rápido + red de seguridad con Cloud Scheduler).
 
 ## Endpoints
 | Método y ruta | Respuesta | Descripción |
@@ -34,6 +35,7 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 | `PUT /api/staff/tenant/settings` | 200 | Meta de puntos, premio, espera y ventana para deshacer (solo OWNER); devuelve el perfil |
 | `PUT /api/staff/tenant/logo` | 200 | Sube el logo: `multipart/form-data`, campo `file` (solo OWNER); devuelve el perfil |
 | `DELETE /api/staff/tenant/logo` | 204 | Quita el logo (solo OWNER); idempotente |
+| `POST /internal/outbox/publish` | 200 | Publica un lote de avisos pendientes (Cloud Scheduler): `{claimed, published, failed}` |
 
 Cuerpos (JSON):
 ```jsonc
@@ -140,7 +142,7 @@ curl -X PUT "$URL/api/staff/tenant/logo" -H "Authorization: Bearer $ACCESS_TOKEN
 La PWA (loyalty-web) se instala por negocio: `/caja/{slug}` enlaza `/caja/{slug}/manifest.webmanifest`,
 y Firebase Hosting reenvía esa ruta a este servicio con el path original (está fuera de `/api`).
 - Público: no lo intercepta ningún filtro (`AdminAuthFilter` solo cubre `/api/admin`; `StaffAuthFilter`,
-  `/api/staff` y `/api/auth/me`) y el servicio no usa la cadena de seguridad de Spring WebFlux.
+  `/api/staff` y `/api/auth/me`; `InternalAuthFilter`, `/internal`) y el servicio no usa la cadena de seguridad de Spring WebFlux.
 - `Content-Type: application/manifest+json`, `Cache-Control: public, max-age=300`.
 - Sale de la identidad pública (`GetTenantIdentityHandler`): no expone nada más. `id` y `start_url` =
   `/caja/{slug}`, `scope` `/`, `short_name` = nombre recortado a 12 caracteres sin partir palabras (si la
@@ -156,6 +158,37 @@ y Firebase Hosting reenvía esa ruta a este servicio con el path original (está
   "icons": [ { "src": "https://storage.googleapis.com/<bucket>/tenants/<id>/logo-<sha256>.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
              { "src": "https://storage.googleapis.com/<bucket>/tenants/<id>/logo-<sha256>.png", "sizes": "192x192", "type": "image/png", "purpose": "any" } ] }
 ```
+
+### Avisos al wallet-service (outbox → Pub/Sub)
+Diseño 12.11. Cada cambio escribe su aviso en `loyalty.outbox` en la misma transacción; publicarlo es
+`PublishPendingEventsHandler`, por dos caminos:
+- **Camino rápido**: después del commit de crear negocio, cambiar identidad o configuración, y subir o
+  quitar el logo, el handler publica en la misma petición el aviso que escribió
+  (`OutboxFastPath`), con un máximo de `OUTBOX_FAST_PATH_TIMEOUT_MS`. Si Pub/Sub falla o tarda, el aviso
+  queda pendiente y la respuesta de la operación no cambia.
+- **Red de seguridad**: Cloud Scheduler llama cada minuto a `POST /internal/outbox/publish` y publica un
+  lote de hasta `OUTBOX_BATCH_SIZE` avisos `PENDING` vencidos.
+
+Los dos caminos reclaman igual (`sql/outbox/claim-*.sql`): una sola sentencia con `FOR UPDATE SKIP LOCKED`
+que corre el `next_attempt_at` del aviso al fin de un plazo (`OUTBOX_CLAIM_LEASE_SECONDS`). El bloqueo dura
+solo esa sentencia, no la llamada a Pub/Sub; mientras dura el plazo ninguna otra ejecución lo toma. Si la
+instancia muere a medio publicar, el aviso vuelve a estar disponible al vencer el plazo (puede salir dos
+veces: es inofensivo, el wallet-service ignora repetidos por `seq`).
+```text
+Pub/Sub confirma  → status PUBLISHED, published_at
+Pub/Sub falla     → attempts+1, next_attempt_at = ahora + 5 s × 2^(attempts−1) (5 s, 10 s, 20 s, …; tope 15 min)
+                    (también si no confirma en OUTBOX_PUBLISH_TIMEOUT_MS)
+attempts = OUTBOX_MAX_ATTEMPTS → status FAILED y log ERROR "Outbox event FAILED id=… eventType=… tenantId=…"
+```
+- Mensaje: cuerpo = `payload` (JSON); atributos `eventType`, `tenantId`, `cardId` (cadena vacía si no hay) y
+  `seq` (el `id` del aviso).
+- Sin `PUBSUB_TOPIC` la publicación queda desactivada: los avisos se acumulan en `PENDING` y el endpoint
+  responde `{"claimed":0,"published":0,"failed":0,"disabled":true}`.
+- `/internal/**` lo protege `InternalAuthFilter` con un ID token de Google, igual que la API admin, pero con
+  `OUTBOX_PUBLISH_AUDIENCE` y `OUTBOX_PUBLISH_ALLOWED_EMAILS` (la cuenta del job de Scheduler). Sin token o
+  token inválido → 401 `UNAUTHORIZED`; otro correo o variables vacías → 403 `FORBIDDEN`.
+- Logs: solo conteos e ids; nunca el payload.
+- Pendiente: limpieza de avisos `PUBLISHED` antiguos y la alerta sobre los `FAILED`.
 
 ### Autenticación de la API admin
 Sin secretos compartidos: n8n corre en una VM de GCP y presenta un ID token de Google de su cuenta
@@ -184,8 +217,9 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 ```bash
 ./gradlew test
 ```
-`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `ActivationFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT` y `GcsLogoStorageIT`
-(contra `fsouza/fake-gcs-server`) usan Testcontainers (requieren Docker; se omiten si no hay).
+`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `ActivationFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT`,
+`OutboxFlowIT`, `GcsLogoStorageIT` (contra `fsouza/fake-gcs-server`) y `PubSubEventAdapterIT` (contra el emulador de
+Pub/Sub, `google-cloud-cli:583.0.0-emulators`) usan Testcontainers (requieren Docker; se omiten si no hay).
 Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JDK no escribe WebP.
 
 ## Configuración
@@ -211,9 +245,18 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `BCRYPT_STRENGTH` | Costo de bcrypt | 12 |
 | `LOGOS_BUCKET` | Bucket de logos (Terraform: `<project_id>-logos`; lo pone en Cloud Run). Sin él, subir un logo responde 503 `STORAGE_UNAVAILABLE` | vacía |
 | `LOGOS_PUBLIC_BASE_URL` | Base de las URLs públicas de los logos (p. ej. un CDN) | `https://storage.googleapis.com/<LOGOS_BUCKET>` |
+| `PUBSUB_TOPIC` | Tópico completo de los avisos. Dev: `projects/axioma-loyalty-dev/topics/loyalty-events`. Sin él la publicación queda desactivada; con un valor mal formado el servicio no arranca | vacía (desactivada) |
+| `OUTBOX_BATCH_SIZE` | Avisos por ejecución de la red de seguridad (1–500) | 50 |
+| `OUTBOX_MAX_ATTEMPTS` | Intentos fallidos antes de pasar a `FAILED` | 8 |
+| `OUTBOX_FAST_PATH_TIMEOUT_MS` | Tiempo máximo del camino rápido dentro de la petición | 1000 |
+| `OUTBOX_PUBLISH_TIMEOUT_MS` | Tiempo máximo para que Pub/Sub confirme un aviso (incluye los reintentos del cliente) | 10000 |
+| `OUTBOX_CLAIM_LEASE_SECONDS` | Plazo de un aviso reclamado; debe pasar de `OUTBOX_PUBLISH_TIMEOUT_MS` | 120 |
+| `OUTBOX_PUBLISH_AUDIENCE` | Audiencia del ID token de Cloud Scheduler (la que envía el job). Dev: `https://loyalty-service-g42hkr2xmq-uk.a.run.app` | vacía (`/internal` cerrado) |
+| `OUTBOX_PUBLISH_ALLOWED_EMAILS` | Correos permitidos en `/internal`, separados por comas. Dev: `sa-scheduler@axioma-loyalty-dev.iam.gserviceaccount.com` | vacía (`/internal` cerrado) |
 
-Cloud Storage usa Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
-En local no hace falta: el cliente se crea al primer uso.
+Cloud Storage y Pub/Sub usan Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
+En local no hace falta para Storage (el cliente se crea al primer uso); con `PUBSUB_TOPIC` definido, el publisher
+necesita ADC al arrancar.
 
 `DATABASE_URL` también acepta la cadena copiada como comando de Neon (`psql 'postgresql://...'`).
 
@@ -224,14 +267,16 @@ el mismo esquema), Flyway las toma como línea base en la versión 1.
 GitHub Actions (`.github/workflows/ci.yml`): prueba en cada PR; al hacer merge a `main` construye
 la imagen, la sube a Artifact Registry y despliega en Cloud Run (dev) con Workload Identity Federation.
 Variables del repo: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER_SA`
-(salen de `terraform output` en `loyalty-infra`), y `ADMIN_AUDIENCE`, `ADMIN_ALLOWED_EMAILS`
-(se pasan a Cloud Run como variables de entorno; no son secretos).
+(salen de `terraform output` en `loyalty-infra`), y `ADMIN_AUDIENCE`, `ADMIN_ALLOWED_EMAILS`, `APP_WEB_BASE_URL`,
+`PUBSUB_TOPIC`, `OUTBOX_BATCH_SIZE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_FAST_PATH_TIMEOUT_MS`, `OUTBOX_PUBLISH_AUDIENCE`
+y `OUTBOX_PUBLISH_ALLOWED_EMAILS` (se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
+numérica sin definir llega vacía y toma su valor por defecto.
 
 ## Estructura
 ```
 application/{command,query,handler,validator}
 domain/{model,port/out}
-adapter/in/web{,/admin,/auth,/staff}  ·  adapter/out/persist/{command,query}  ·  adapter/out/{security,image,storage}
+adapter/in/web{,/admin,/auth,/staff,/internal}  ·  adapter/out/persist/{command,query}  ·  adapter/out/{security,image,storage,messaging}
 config
 resources/{db/migration, sql}
 ```

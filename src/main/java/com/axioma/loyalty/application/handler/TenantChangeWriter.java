@@ -17,7 +17,8 @@ import reactor.core.publisher.Mono;
 /**
  * Cambia un negocio activo y escribe su TenantChanged en la misma transacción. Bloquea la fila
  * mientras tanto, para que dos cambios simultáneos (p. ej. identidad y logo) no se pisen.
- * Si el cambio no altera nada, no escribe ni avisa.
+ * Si el cambio no altera nada, no escribe ni avisa. La publicación del aviso va después del commit
+ * (OutboxFastPath), nunca aquí.
  */
 @Component
 @RequiredArgsConstructor
@@ -34,11 +35,11 @@ public class TenantChangeWriter {
                 .flatMap(before -> {
                     Tenant after = change.apply(before);
                     if (after.equals(before)) {
-                        return Mono.just(new TenantUpdate(before, before));
+                        return Mono.just(TenantUpdate.unchanged(before));
                     }
                     return tenantRepository.update(after)
                             .flatMap(saved -> outbox.append(TenantChanged.from(saved))
-                                    .thenReturn(new TenantUpdate(before, saved)));
+                                    .map(eventId -> new TenantUpdate(before, saved, eventId)));
                 });
     }
 }
