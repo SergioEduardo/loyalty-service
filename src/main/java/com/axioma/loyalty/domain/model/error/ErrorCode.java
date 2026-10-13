@@ -25,6 +25,14 @@ public enum ErrorCode {
     AUTH_UNAVAILABLE("El inicio de sesión no está disponible por ahora."),
     UNAUTHORIZED("Se requiere autenticación."),
     FORBIDDEN("No tienes permiso para esta operación."),
+    INVALID_PHONE("Revisa tu teléfono y tu nombre."),
+    INVALID_NAME("Revisa tu teléfono y tu nombre."),
+    INVALID_CODE("El código no es correcto."),
+    CODE_EXPIRED("El código venció. Pide uno nuevo."),
+    RATE_LIMITED("Demasiados intentos. Espera unos minutos."),
+    VERIFICATION_UNAVAILABLE("No pudimos enviar el código. Intenta de nuevo."),
+    TEMPLATE_NOT_READY("Estamos preparando la tarjeta. Intenta en un momento."),
+    PASS_SERVICE_UNAVAILABLE("No pudimos crear tu tarjeta. Intenta de nuevo."),
     INVALID_REQUEST("La solicitud no es válida."),
     INTERNAL_ERROR("Ocurrió un error. Intenta de nuevo.");
 

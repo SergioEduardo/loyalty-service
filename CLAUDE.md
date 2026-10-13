@@ -84,3 +84,31 @@ Publicación de avisos (outbox → Pub/Sub, diseño 12.11; `PublishPendingEvents
   `OUTBOX_PUBLISH_ALLOWED_EMAILS`; vacías → 403). La validación del token es `GoogleIdTokenVerifier`, compartida con
   `AdminTokenVerifier`. Todo endpoint nuevo bajo `/internal` queda detrás de ese filtro.
 - Pendiente: limpieza de avisos `PUBLISHED` antiguos y alerta sobre `FAILED`.
+
+Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6 y 12.7; `EnrollmentController`):
+- `POST /verification {slug, phone}` → `{verificationId, expiresAt}`; `POST /card {slug, phone, name, verificationId, code}`
+  → `{isNew, apple: {url, expiresAt}, google: null}`. Nunca exponer cardId (salvo dentro del enlace del wallet), nombre ni
+  teléfono. El slug va en el cuerpo, no en la ruta (RequestLogFilter registra la ruta). Identidad del negocio para la
+  página de alta: el `GET /api/public/tenants/{slug}/identity` existente.
+- Teléfono: `PhoneRules` (libphonenumber, región MX, acepta `+52 1`). Negocio: `ActiveTenantGuard.requireBySlug`.
+- Código: `SecureVerificationCodeGenerator` (6 dígitos); en la base solo `HmacVerificationCodeHasher` (HMAC-SHA256 hex,
+  llave `OTP_HASH_SALT` ≥ 32 bytes, sobre `"{tenantId}|{phoneE164}|{code}"`); sin sal → 503 `VERIFICATION_UNAVAILABLE`.
+- Límites (`EnrollRateLimits`, `loyalty.enroll_rate_limits`, ventana fija 1 h, IP como SHA-256): IP y negocio al pedir
+  código, IP al pedir tarjeta. Teléfono: `PhoneVerificationIssuer` (bloqueo `pg_advisory_xact_lock` + conteo por
+  `created_at` + insert en una transacción). Excedido → 429 `RATE_LIMITED` con `Retry-After` (`RateLimitedException`).
+- `VerificationCodeCheck`: discrepancia de id/negocio/teléfono → `INVALID_CODE` idéntico; vencida → `CODE_EXPIRED`;
+  validada → no compara; si no, `UPDATE attempts = attempts + 1` antes de comparar en tiempo constante; al máximo →
+  `CodeAttemptsExhaustedException` (TOO_MANY_ATTEMPTS **400**, "Pide un código nuevo"; el 429 de login/activación es
+  `TooManyAttemptsException`).
+- `CardEnrollmentWriter`: INSERT ON CONFLICT DO NOTHING y, si no insertó, SELECT (otra sentencia) en una transacción
+  corta; commit antes del wallet-service. Nunca llamar al wallet-service dentro de una transacción.
+- `WalletPassIssuerPort` → `HttpWalletPassIssuer` (`WALLET_SERVICE_URL`/internal/passes, ID token de ADC con
+  `WALLET_SERVICE_AUDIENCE` vía `ServiceIdTokenSource`, tope `WALLET_ISSUE_TIMEOUT_MS`). 409 TEMPLATE_NOT_READY → 409;
+  lo demás → 503 `PASS_SERVICE_UNAVAILABLE` (401/403 con log ERROR sin detalles). Sin URL: `DisabledWalletPassIssuer`.
+- `PhoneVerificationSenderPort` por `VERIFICATION_SENDER` (`EnrollConfig`): `disabled` (defecto, 503), `log` (código en
+  log INFO; **solo `APP_ENV=dev`, si no la app no arranca**), `whatsapp` (pendiente, 503). Fallo de envío → la
+  verificación se queda contando y 503 `VERIFICATION_UNAVAILABLE`.
+- Privacidad: nunca registrar teléfono, nombre, código (fuera de `log`), hash, IP ni verificationId junto al teléfono;
+  solo tenantId, resultados y conteos. Commands/requests/modelos con esos datos sobrescriben `toString`.
+- Pendiente: adaptador real de WhatsApp (plantilla de Meta), limpieza periódica de verificaciones vencidas y de
+  contadores de límite, Google Wallet (`google` en null).

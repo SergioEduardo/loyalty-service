@@ -59,6 +59,18 @@ jobs:
             OUTBOX_FAST_PATH_TIMEOUT_MS=${{ vars.OUTBOX_FAST_PATH_TIMEOUT_MS }}
             OUTBOX_PUBLISH_AUDIENCE=${{ vars.OUTBOX_PUBLISH_AUDIENCE }}
             OUTBOX_PUBLISH_ALLOWED_EMAILS=${{ vars.OUTBOX_PUBLISH_ALLOWED_EMAILS }}
+            VERIFICATION_SENDER=${{ vars.VERIFICATION_SENDER || 'disabled' }}
+            APP_ENV=${{ vars.APP_ENV }}
+            WALLET_SERVICE_URL=${{ vars.WALLET_SERVICE_URL }}
+            WALLET_SERVICE_AUDIENCE=${{ vars.WALLET_SERVICE_AUDIENCE }}
+            WALLET_ISSUE_TIMEOUT_MS=${{ vars.WALLET_ISSUE_TIMEOUT_MS || '5000' }}
+            ENROLL_PHONE_LIMIT_PER_HOUR=${{ vars.ENROLL_PHONE_LIMIT_PER_HOUR || '3' }}
+            ENROLL_IP_LIMIT_PER_HOUR=${{ vars.ENROLL_IP_LIMIT_PER_HOUR || '10' }}
+            ENROLL_TENANT_LIMIT_PER_HOUR=${{ vars.ENROLL_TENANT_LIMIT_PER_HOUR || '60' }}
+            ENROLL_CARD_IP_LIMIT_PER_HOUR=${{ vars.ENROLL_CARD_IP_LIMIT_PER_HOUR || '30' }}
+            ENROLL_CODE_TTL_MINUTES=${{ vars.ENROLL_CODE_TTL_MINUTES || '10' }}
+            ENROLL_MAX_ATTEMPTS=${{ vars.ENROLL_MAX_ATTEMPTS || '5' }}
           secrets: |
             DATABASE_URL=neon-database-url:latest
             JWT_SIGNING_KEY=jwt-signing-key:latest
+            OTP_HASH_SALT=otp-hmac-salt:latest

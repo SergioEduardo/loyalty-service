@@ -1,7 +1,7 @@
 package com.axioma.loyalty.domain.model.error;
 
 /** TOO_MANY_ATTEMPTS con los segundos que faltan para poder intentar de nuevo. */
-public class TooManyAttemptsException extends LoyaltyException {
+public class TooManyAttemptsException extends LoyaltyException implements RetryAfter {
 
     private final long retryAfterSeconds;
 
@@ -10,6 +10,7 @@ public class TooManyAttemptsException extends LoyaltyException {
         this.retryAfterSeconds = retryAfterSeconds;
     }
 
+    @Override
     public long getRetryAfterSeconds() {
         return retryAfterSeconds;
     }

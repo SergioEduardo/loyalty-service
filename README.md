@@ -4,7 +4,7 @@ Servicio del programa de lealtad: negocios, identidad, cuentas, sesiones, tarjet
 Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 (estándar de desarrollo de Axioma v1.0). Base de datos: Neon (schema `loyalty`).
 
-## Estado (entrega 1, avance 4)
+## Estado (entrega 2, bloque 4)
 - Esqueleto hexagonal, errores normalizados, `requestId` en logs, migraciones Flyway.
 - `GET /api/public/tenants/{slug}/identity`: identidad pública del negocio.
 - API admin para n8n: alta de negocios y cuentas del personal (protegida con ID tokens de Google).
@@ -13,6 +13,8 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 - Manifest de la PWA de caja por negocio (`/caja/{slug}/manifest.webmanifest`).
 - Activación de cuentas por enlace de un solo uso (la persona elige su contraseña).
 - Publicación de los avisos del outbox en Pub/Sub (camino rápido + red de seguridad con Cloud Scheduler).
+- Alta de la tarjeta del cliente: verificación del teléfono por código (12.6) y tarjeta + pase de Apple
+  vía el wallet-service (12.7).
 
 ## Endpoints
 | Método y ruta | Respuesta | Descripción |
@@ -35,6 +37,8 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 | `PUT /api/staff/tenant/settings` | 200 | Meta de puntos, premio, espera y ventana para deshacer (solo OWNER); devuelve el perfil |
 | `PUT /api/staff/tenant/logo` | 200 | Sube el logo: `multipart/form-data`, campo `file` (solo OWNER); devuelve el perfil |
 | `DELETE /api/staff/tenant/logo` | 204 | Quita el logo (solo OWNER); idempotente |
+| `POST /api/public/enroll/verification` | 200 | Pide un código para el teléfono (sin autenticación): `{slug, phone}` → `{verificationId, expiresAt}` |
+| `POST /api/public/enroll/card` | 200 | Da la tarjeta con el código (sin autenticación): `{slug, phone, name, verificationId, code}` → `{isNew, apple, google}` |
 | `POST /internal/outbox/publish` | 200 | Publica un lote de avisos pendientes (Cloud Scheduler): `{claimed, published, failed}` |
 
 Cuerpos (JSON):
@@ -63,10 +67,12 @@ Cuerpos (JSON):
 ```
 Errores: `{ "code": "...", "message": "..." }`. 400 `INVALID_SLUG`, `INVALID_TEXT`,
 `INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`, `INVALID_ACTIVATION`,
-`INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`; 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`, `INVALID_SESSION`;
-403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`, `USERNAME_TAKEN`, `USER_INACTIVE`;
-413 `LOGO_TOO_LARGE`; 415 `UNSUPPORTED_IMAGE_FORMAT`; 429 `TOO_MANY_ATTEMPTS` (con `Retry-After`);
-500 `INTERNAL_ERROR`; 503 `AUTH_UNAVAILABLE`, `STORAGE_UNAVAILABLE`.
+`INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`, `INVALID_PHONE`, `INVALID_NAME`, `INVALID_CODE`, `CODE_EXPIRED`,
+`TOO_MANY_ATTEMPTS` (solo el alta: intentos del código agotados); 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`,
+`INVALID_SESSION`; 403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`,
+`USERNAME_TAKEN`, `USER_INACTIVE`, `TEMPLATE_NOT_READY`; 413 `LOGO_TOO_LARGE`; 415 `UNSUPPORTED_IMAGE_FORMAT`;
+429 `TOO_MANY_ATTEMPTS` (login y activación), `RATE_LIMITED` (alta), ambos con `Retry-After`; 500 `INTERNAL_ERROR`;
+503 `AUTH_UNAVAILABLE`, `STORAGE_UNAVAILABLE`, `VERIFICATION_UNAVAILABLE`, `PASS_SERVICE_UNAVAILABLE`.
 
 ### Sesiones del personal
 ```text
@@ -117,6 +123,79 @@ PWA: /caja/{slug}/activar#t={token}   (el token va en el fragmento: no llega a n
   en 15 minutos. Cuenta aunque el slug no exista. La IP sale del primer valor de `X-Forwarded-For`; como el
   cliente puede falsearlo, el límite por slug es el que no se puede esquivar.
 - El token nunca se registra en logs ni va en eventos (solo `tenantId`, `userId` y `expiresAt`).
+
+### Alta de la tarjeta del cliente
+Diseño 12.6 y 12.7. Página de alta de la PWA: lee la identidad del negocio de
+`GET /api/public/tenants/{slug}/identity` (`{slug, name, description, logoUrl, brandColor}`, solo negocios
+activos; si no, 404 `TENANT_NOT_FOUND`) y luego:
+```text
+POST /api/public/enroll/verification {slug, phone}
+     └─► 200 {verificationId, expiresAt}          (el código llega por WhatsApp; vale 10 min)
+POST /api/public/enroll/card {slug, phone, name, verificationId, code}
+     └─► 200 {isNew, apple: {url, expiresAt}, google: null}
+         (apple.url: enlace firmado del wallet-service para descargar el .pkpass; vale 10 min)
+```
+```jsonc
+// POST /api/public/enroll/verification   (phone: con o sin +52; espacios, guiones y paréntesis se ignoran)
+{ "slug": "mi-cafe", "phone": "55 1234 5678" }
+// 200
+{ "verificationId": "3f1c…", "expiresAt": "2026-10-13T12:10:00Z" }
+// POST /api/public/enroll/card
+{ "slug": "mi-cafe", "phone": "55 1234 5678", "name": "Ana López", "verificationId": "3f1c…", "code": "042137" }
+// 200 (nunca lleva el nombre ni el teléfono; el cardId solo va dentro del enlace del wallet-service)
+{ "isNew": true, "apple": { "url": "https://<wallet>/passes/<cardId>.pkpass?exp=…&sig=…", "expiresAt": "…" }, "google": null }
+```
+Pedir el código:
+- Teléfono a E.164 con libphonenumber (México por defecto; también acepta el antiguo `+52 1`). Si no:
+  400 `INVALID_PHONE`. Slug inválido, inexistente o inactivo: 404 `TENANT_NOT_FOUND`.
+- Límites por hora (429 `RATE_LIMITED` con `Retry-After`): 3 códigos por teléfono y negocio
+  (`ENROLL_PHONE_LIMIT_PER_HOUR`, contado con `phone_verifications.created_at`, con un bloqueo por teléfono
+  para que dos solicitudes simultáneas no pasen las dos), 10 por IP (`ENROLL_IP_LIMIT_PER_HOUR`) y 60 por
+  negocio (`ENROLL_TENANT_LIMIT_PER_HOUR`). Los de IP y negocio usan `loyalty.enroll_rate_limits` (ventana
+  fija de una hora, como `activation_attempts`); la IP va como SHA-256, nunca en claro. Cada solicitud
+  cuenta, se acepte o no.
+- Código de 6 dígitos (`SecureRandom`), vigencia `ENROLL_CODE_TTL_MINUTES`, 0 intentos. En la base solo
+  `code_hash` = HMAC-SHA256 en hex con llave `OTP_HASH_SALT` de `"{tenantId}|{phoneE164}|{código}"`.
+- Nunca consulta tarjetas: la respuesta y el tiempo son los mismos tenga o no tarjeta el teléfono.
+- Si el envío falla: 503 `VERIFICATION_UNAVAILABLE`, y la verificación creada sigue contando para el límite.
+
+Dar la tarjeta:
+- Nombre: texto plano de 1 a 80 caracteres (recortado; sin controles, `<`, `>` ni controles bidi), si no
+  400 `INVALID_NAME`; teléfono como arriba; código de 6 dígitos (si no, o si `verificationId` no es un
+  UUID: 400 `INVALID_CODE`).
+- Límite de altas por IP: `ENROLL_CARD_IP_LIMIT_PER_HOUR` (30) → 429 `RATE_LIMITED`.
+- La verificación se busca por `verificationId`, negocio y teléfono; cualquier discrepancia es 400
+  `INVALID_CODE` (el mismo cuerpo, sin decir cuál). Vencida: 400 `CODE_EXPIRED`. Ya validada: vale hasta
+  vencer sin volver a comparar. Si no, suma el intento con un `UPDATE … attempts = attempts + 1` atómico
+  **antes** de comparar el hash (tiempo constante); sin coincidencia 400 `INVALID_CODE`, y al llegar a
+  `ENROLL_MAX_ATTEMPTS` (5) 400 `TOO_MANY_ATTEMPTS` ("Pide un código nuevo"; sin `Retry-After`).
+- Tarjeta en una transacción corta: `INSERT … ON CONFLICT (tenant_id, phone_e164) DO NOTHING`; si ya existía
+  se lee y conserva su nombre. `isNew` = si se insertó en esta llamada. Commit antes de llamar al wallet-service.
+- `POST {WALLET_SERVICE_URL}/internal/passes` con `{cardId, tenantId, holderName, points}` y un ID token de
+  Google de la cuenta de runtime (`sa-loyalty-service`, por el servidor de metadatos) con audiencia
+  `WALLET_SERVICE_AUDIENCE`. Máximo `WALLET_ISSUE_TIMEOUT_MS` (token incluido). 409 `TEMPLATE_NOT_READY` → 409
+  `TEMPLATE_NOT_READY`; tiempo agotado, red o 5xx → 503 `PASS_SERVICE_UNAVAILABLE`; 401/403 → 503
+  `PASS_SERVICE_UNAVAILABLE` y log ERROR "Authentication to wallet-service was rejected". Sin
+  `WALLET_SERVICE_URL`: 503 `PASS_SERVICE_UNAVAILABLE` (la tarjeta sí se crea).
+- Reintento seguro: si el wallet-service falla, la tarjeta y la verificación validada se quedan; el
+  cliente reintenta con el mismo código hasta que venza (el reintento responde `isNew: false`).
+- `google` es `null` hasta conectar Google Wallet.
+
+Envío del código (`PhoneVerificationSenderPort`, por `VERIFICATION_SENDER`):
+
+| Modo | Comportamiento |
+|---|---|
+| `disabled` (por defecto) | No envía; pedir un código responde 503 `VERIFICATION_UNAVAILABLE` sin crear nada |
+| `log` | Escribe el código en un log INFO (`Verification code (VERIFICATION_SENDER=log) tenantId=… verificationId=… code=…`) para probar en dev. **Solo con `APP_ENV=dev`**: con otro valor o sin `APP_ENV` el servicio no arranca |
+| `whatsapp` | Aún no implementado (llega con la plantilla de Meta): responde 503 `VERIFICATION_UNAVAILABLE` |
+
+Privacidad: los logs nunca llevan el teléfono, el nombre, el código (fuera del modo `log`), el hash, la IP
+ni el `verificationId` junto al teléfono; solo `tenantId`, resultados y conteos. Commands, requests y
+modelos con esos datos sobrescriben `toString`. `EnrollmentFlowIT` y `EnrollmentLogSenderIT` lo verifican.
+
+Pendiente: adaptador real de WhatsApp (plantilla de autenticación de Meta, secreto `whatsapp-api-token`);
+limpieza periódica de `phone_verifications` vencidas y de `enroll_rate_limits` (y `activation_attempts`,
+`login_attempts`) con ventana vencida; Google Wallet (`google` en `null`).
 
 ### Perfil y logo del negocio
 - Solo OWNER (CASHIER → 403 `FORBIDDEN`; sin token → 401). El negocio sale del token: las rutas no
@@ -218,7 +297,8 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 ./gradlew test
 ```
 `TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `ActivationFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT`,
-`OutboxFlowIT`, `GcsLogoStorageIT` (contra `fsouza/fake-gcs-server`) y `PubSubEventAdapterIT` (contra el emulador de
+`OutboxFlowIT`, `EnrollmentFlowIT`, `EnrollmentLogSenderIT`, `EnrollmentDisabledSenderIT` (el wallet-service es un
+servidor HTTP falso, `FakeWalletService`), `GcsLogoStorageIT` (contra `fsouza/fake-gcs-server`) y `PubSubEventAdapterIT` (contra el emulador de
 Pub/Sub, `google-cloud-cli:583.0.0-emulators`) usan Testcontainers (requieren Docker; se omiten si no hay).
 Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JDK no escribe WebP.
 
@@ -253,8 +333,20 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `OUTBOX_CLAIM_LEASE_SECONDS` | Plazo de un aviso reclamado; debe pasar de `OUTBOX_PUBLISH_TIMEOUT_MS` | 120 |
 | `OUTBOX_PUBLISH_AUDIENCE` | Audiencia del ID token de Cloud Scheduler (la que envía el job). Dev: `https://loyalty-service-g42hkr2xmq-uk.a.run.app` | vacía (`/internal` cerrado) |
 | `OUTBOX_PUBLISH_ALLOWED_EMAILS` | Correos permitidos en `/internal`, separados por comas. Dev: `sa-scheduler@axioma-loyalty-dev.iam.gserviceaccount.com` | vacía (`/internal` cerrado) |
+| `OTP_HASH_SALT` | Llave del HMAC de los códigos, 32+ bytes (Secret Manager: `otp-hmac-salt`). Sin ella pedir un código o la tarjeta responde 503 `VERIFICATION_UNAVAILABLE` | vacía |
+| `VERIFICATION_SENDER` | Envío del código: `disabled`, `log` (solo con `APP_ENV=dev`) o `whatsapp` (aún no implementado). Otro valor: no arranca | `disabled` |
+| `APP_ENV` | Ambiente. Solo `dev` permite `VERIFICATION_SENDER=log` | vacía |
+| `ENROLL_PHONE_LIMIT_PER_HOUR` | Códigos por (negocio, teléfono) en la última hora | 3 |
+| `ENROLL_IP_LIMIT_PER_HOUR` | Solicitudes de código por IP por hora | 10 |
+| `ENROLL_TENANT_LIMIT_PER_HOUR` | Solicitudes de código por negocio por hora | 60 |
+| `ENROLL_CARD_IP_LIMIT_PER_HOUR` | Altas (`/enroll/card`) por IP por hora | 30 |
+| `ENROLL_CODE_TTL_MINUTES` | Vigencia del código (1–60) | 10 |
+| `ENROLL_MAX_ATTEMPTS` | Intentos por código (1–20) | 5 |
+| `WALLET_SERVICE_URL` | Base del wallet-service. Dev: `https://wallet-service-g42hkr2xmq-uk.a.run.app`. Sin ella el alta responde 503 `PASS_SERVICE_UNAVAILABLE` | vacía |
+| `WALLET_SERVICE_AUDIENCE` | Audiencia del ID token hacia el wallet-service (su `WALLET_EVENTS_AUDIENCE`). Dev: `https://wallet-service-g42hkr2xmq-uk.a.run.app` | `WALLET_SERVICE_URL` |
+| `WALLET_ISSUE_TIMEOUT_MS` | Tiempo máximo de IssuePass, incluido obtener el token | 5000 |
 
-Cloud Storage y Pub/Sub usan Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
+Cloud Storage, Pub/Sub y el ID token hacia el wallet-service usan Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
 En local no hace falta para Storage (el cliente se crea al primer uso); con `PUBSUB_TOPIC` definido, el publisher
 necesita ADC al arrancar.
 
@@ -268,15 +360,18 @@ GitHub Actions (`.github/workflows/ci.yml`): prueba en cada PR; al hacer merge a
 la imagen, la sube a Artifact Registry y despliega en Cloud Run (dev) con Workload Identity Federation.
 Variables del repo: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER_SA`
 (salen de `terraform output` en `loyalty-infra`), y `ADMIN_AUDIENCE`, `ADMIN_ALLOWED_EMAILS`, `APP_WEB_BASE_URL`,
-`PUBSUB_TOPIC`, `OUTBOX_BATCH_SIZE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_FAST_PATH_TIMEOUT_MS`, `OUTBOX_PUBLISH_AUDIENCE`
-y `OUTBOX_PUBLISH_ALLOWED_EMAILS` (se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
-numérica sin definir llega vacía y toma su valor por defecto.
+`PUBSUB_TOPIC`, `OUTBOX_BATCH_SIZE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_FAST_PATH_TIMEOUT_MS`, `OUTBOX_PUBLISH_AUDIENCE`,
+`OUTBOX_PUBLISH_ALLOWED_EMAILS`, `VERIFICATION_SENDER`, `APP_ENV`, `WALLET_SERVICE_URL`, `WALLET_SERVICE_AUDIENCE`,
+`WALLET_ISSUE_TIMEOUT_MS` y `ENROLL_*` (se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
+numérica sin definir llega vacía y toma su valor por defecto. Secretos de Secret Manager: `DATABASE_URL`
+(`neon-database-url`), `JWT_SIGNING_KEY` (`jwt-signing-key`) y `OTP_HASH_SALT` (`otp-hmac-salt`); cada uno necesita
+al menos una versión o el despliegue falla.
 
 ## Estructura
 ```
 application/{command,query,handler,validator}
 domain/{model,port/out}
-adapter/in/web{,/admin,/auth,/staff,/internal}  ·  adapter/out/persist/{command,query}  ·  adapter/out/{security,image,storage,messaging}
+adapter/in/web{,/admin,/auth,/staff,/internal,/enroll}  ·  adapter/out/persist/{command,query}  ·  adapter/out/{security,image,storage,messaging,verification,wallet}
 config
 resources/{db/migration, sql}
 ```
