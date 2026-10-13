@@ -10,11 +10,13 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 - API admin para n8n: alta de negocios y cuentas del personal (protegida con ID tokens de Google).
 - Login, sesiones (access + refresh con rotación) y roles del personal.
 - Perfil del negocio para el dueño: identidad, configuración del programa y logo (Cloud Storage).
+- Manifest de la PWA de caja por negocio (`/caja/{slug}/manifest.webmanifest`).
 
 ## Endpoints
 | Método y ruta | Respuesta | Descripción |
 |---|---|---|
 | `GET /api/public/tenants/{slug}/identity` | 200 | Identidad pública del negocio (sin autenticación) |
+| `GET /caja/{slug}/manifest.webmanifest` | 200 | Manifest de la PWA de caja del negocio (sin autenticación; 404 sin cuerpo si no existe o está inactivo) |
 | `POST /api/admin/tenants` | 201 | Alta de negocio y aviso `TenantChanged` en `loyalty.outbox` |
 | `POST /api/admin/tenants/{tenantId}/users` | 201 | Alta de cuenta (`CASHIER` u `OWNER`) |
 | `POST /api/admin/tenants/{tenantId}/users/{userId}/deactivate` | 204 | Desactiva la cuenta y revoca sus sesiones |
@@ -99,6 +101,27 @@ curl "$URL/api/auth/me" -H "Authorization: Bearer $ACCESS_TOKEN"
 curl -X PUT "$URL/api/staff/tenant/logo" -H "Authorization: Bearer $ACCESS_TOKEN" -F "file=@logo.webp"
 ```
 
+### Manifest de la PWA de caja
+La PWA (loyalty-web) se instala por negocio: `/caja/{slug}` enlaza `/caja/{slug}/manifest.webmanifest`,
+y Firebase Hosting reenvía esa ruta a este servicio con el path original (está fuera de `/api`).
+- Público: no lo intercepta ningún filtro (`AdminAuthFilter` solo cubre `/api/admin`; `StaffAuthFilter`,
+  `/api/staff` y `/api/auth/me`) y el servicio no usa la cadena de seguridad de Spring WebFlux.
+- `Content-Type: application/manifest+json`, `Cache-Control: public, max-age=300`.
+- Sale de la identidad pública (`GetTenantIdentityHandler`): no expone nada más. `id` y `start_url` =
+  `/caja/{slug}`, `scope` `/`, `short_name` = nombre recortado a 12 caracteres sin partir palabras (si la
+  primera ya no cabe, se corta), `lang` `es-MX`, `display` `standalone`, `orientation` `portrait`,
+  colores `#f6f4ef`. Íconos: el logo (PNG 512 × 512) declarado como `512x512` y `192x192`; sin logo,
+  `/icons/icon-192.png` y `/icons/icon-512.png` de la web.
+- Negocio inexistente, inactivo o slug inválido → 404 sin cuerpo.
+
+```json
+{ "id": "/caja/mi-cafe", "name": "Cafetería Luna", "short_name": "Cafetería", "description": "Bienvenido",
+  "lang": "es-MX", "start_url": "/caja/mi-cafe", "scope": "/", "display": "standalone", "orientation": "portrait",
+  "background_color": "#f6f4ef", "theme_color": "#f6f4ef",
+  "icons": [ { "src": "https://storage.googleapis.com/<bucket>/tenants/<id>/logo-<sha256>.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+             { "src": "https://storage.googleapis.com/<bucket>/tenants/<id>/logo-<sha256>.png", "sizes": "192x192", "type": "image/png", "purpose": "any" } ] }
+```
+
 ### Autenticación de la API admin
 Sin secretos compartidos: n8n corre en una VM de GCP y presenta un ID token de Google de su cuenta
 de servicio. El servicio valida firma RS256 (llaves de `https://www.googleapis.com/oauth2/v3/certs`),
@@ -126,7 +149,7 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 ```bash
 ./gradlew test
 ```
-`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `TenantProfileFlowIT` y `GcsLogoStorageIT`
+`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT` y `GcsLogoStorageIT`
 (contra `fsouza/fake-gcs-server`) usan Testcontainers (requieren Docker; se omiten si no hay).
 Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JDK no escribe WebP.
 

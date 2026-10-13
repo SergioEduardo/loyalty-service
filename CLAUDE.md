@@ -47,3 +47,10 @@ Perfil del negocio (`/api/staff/tenant/**`, solo OWNER; `TenantProfileController
 - Objeto `tenants/{tenantId}/logo-{sha256}.png`, Cache-Control público de 1 año (inmutable). Se sube fuera de
   la transacción; el anterior se borra después del commit y un fallo al borrarlo solo se registra.
 - Bucket por `LOGOS_BUCKET` y ADC (sin llaves). `logo_url` (pública) y `logo_object_key` se llenan juntas.
+
+Manifest de la PWA de caja (`GET /caja/{slug}/manifest.webmanifest`; `TenantManifestController`):
+- Público y fuera de `/api` (Firebase Hosting lo reenvía con la ruta original). No hay cadena de Spring Security
+  web; si se agrega una o se amplían los prefijos de `AdminAuthFilter`/`StaffAuthFilter`, `/caja/**` debe seguir público.
+- `GetTenantManifestHandler` reutiliza `GetTenantIdentityHandler`; `TenantManifest.of` arma el contenido. Solo datos
+  de la identidad pública. Inexistente, inactivo o slug inválido -> 404 sin cuerpo (no `ApiError`).
+- `application/manifest+json`, `Cache-Control: public, max-age=300`. `short_name` máx. 12 code points sin partir palabras.
