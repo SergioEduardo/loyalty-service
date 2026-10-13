@@ -20,6 +20,10 @@ repositories {
 // 1.21.0 (la que trae Boot 3.5.0) usa una versión de la API de Docker que Docker Engine 29 rechaza,
 // y los IT se omitían en silencio.
 extra["testcontainers.version"] = "1.21.4"
+// google-cloud-storage (libraries-bom 26.90.0) se compila contra estas versiones; Boot 3.5.0 las bajaría
+// (OpenTelemetry 1.49, Gson 2.13) y el cliente podría fallar en runtime con NoSuchMethodError.
+extra["opentelemetry.version"] = "1.62.0"
+extra["gson.version"] = "2.14.0"
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webflux")
@@ -30,6 +34,11 @@ dependencies {
     // Hash de contraseñas (bcrypt) y validación de ID tokens de Google (API admin)
     implementation("org.springframework.security:spring-security-crypto")
     implementation("org.springframework.security:spring-security-oauth2-jose")
+
+    // Logos: Cloud Storage (credenciales por ADC) y lector WebP para ImageIO (el JDK solo trae PNG/JPEG/GIF/BMP)
+    implementation(platform("com.google.cloud:libraries-bom:26.90.0"))
+    implementation("com.google.cloud:google-cloud-storage")
+    implementation("com.twelvemonkeys.imageio:imageio-webp:3.15.3")
 
     // Migraciones (Flyway usa JDBC; la aplicacion usa R2DBC)
     implementation("org.flywaydb:flyway-core")

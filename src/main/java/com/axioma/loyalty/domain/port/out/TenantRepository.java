@@ -15,4 +15,9 @@ public interface TenantRepository {
 
     /** Vacío si no existe. */
     Mono<Tenant> findBySlug(Slug slug);
+
+    /** Lee y bloquea la fila hasta el fin de la transacción. Vacío si no existe. */
+    Mono<Tenant> findByIdForUpdate(UUID tenantId);
+
+    Mono<Tenant> update(Tenant tenant);
 }

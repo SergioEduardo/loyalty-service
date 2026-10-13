@@ -25,6 +25,8 @@ public class TenantEntity implements Persistable<UUID> {
     private String description;
     @Column("logo_url")
     private String logoUrl;
+    @Column("logo_object_key")
+    private String logoObjectKey;
     @Column("brand_color")
     private String brandColor;
     @Column("points_goal")

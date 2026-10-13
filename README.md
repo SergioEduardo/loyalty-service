@@ -4,11 +4,12 @@ Servicio del programa de lealtad: negocios, identidad, cuentas, sesiones, tarjet
 Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 (estándar de desarrollo de Axioma v1.0). Base de datos: Neon (schema `loyalty`).
 
-## Estado (entrega 1, avance 3)
+## Estado (entrega 1, avance 4)
 - Esqueleto hexagonal, errores normalizados, `requestId` en logs, migraciones Flyway.
 - `GET /api/public/tenants/{slug}/identity`: identidad pública del negocio.
 - API admin para n8n: alta de negocios y cuentas del personal (protegida con ID tokens de Google).
 - Login, sesiones (access + refresh con rotación) y roles del personal.
+- Perfil del negocio para el dueño: identidad, configuración del programa y logo (Cloud Storage).
 
 ## Endpoints
 | Método y ruta | Respuesta | Descripción |
@@ -22,6 +23,11 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 | `POST /api/auth/refresh` | 200 | Renueva la sesión: `{refreshToken}`; devuelve un refresh nuevo |
 | `POST /api/auth/logout` | 204 | Cierra la sesión: `{refreshToken}`; idempotente |
 | `GET /api/auth/me` | 200 | Quién soy, según el access token: `{userId, tenantId, role, sessionId}` |
+| `GET /api/staff/tenant` | 200 | Perfil del negocio del token (solo OWNER) |
+| `PUT /api/staff/tenant/identity` | 200 | Nombre, descripción y color (solo OWNER); devuelve el perfil |
+| `PUT /api/staff/tenant/settings` | 200 | Meta de puntos, premio, espera y ventana para deshacer (solo OWNER); devuelve el perfil |
+| `PUT /api/staff/tenant/logo` | 200 | Sube el logo: `multipart/form-data`, campo `file` (solo OWNER); devuelve el perfil |
+| `DELETE /api/staff/tenant/logo` | 204 | Quita el logo (solo OWNER); idempotente |
 
 Cuerpos (JSON):
 ```jsonc
@@ -32,12 +38,21 @@ Cuerpos (JSON):
 { "username": "ana", "password": "al-menos-8", "role": "CASHIER", "name": "Ana" }
 // POST .../reset-password
 { "password": "nueva-clave" }
+// Respuesta de GET/PUT /api/staff/tenant/**
+{ "slug": "mi-cafe", "name": "Mi Café", "description": "Bienvenido",
+  "logoUrl": "https://storage.googleapis.com/<bucket>/tenants/<tenantId>/logo-<sha256>.png", "brandColor": "#112233",
+  "settings": { "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 } }
+// PUT /api/staff/tenant/identity  (name 2–60, description opcional ≤ 140, brandColor #RRGGBB obligatorio; se guarda en minúsculas)
+{ "name": "Mi Café", "description": "Bienvenido", "brandColor": "#A1B2C3" }
+// PUT /api/staff/tenant/settings  (todos obligatorios; pointsGoal > 0, segundos ≥ 0, rewardText ≤ 100)
+{ "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 }
 ```
 Errores: `{ "code": "...", "message": "..." }`. 400 `INVALID_SLUG`, `INVALID_TEXT`,
-`INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`;
-401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`, `INVALID_SESSION`; 403 `FORBIDDEN`;
-404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`, `USERNAME_TAKEN`;
-429 `TOO_MANY_ATTEMPTS` (con `Retry-After`); 500 `INTERNAL_ERROR`; 503 `AUTH_UNAVAILABLE`.
+`INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`,
+`INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`; 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`, `INVALID_SESSION`;
+403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`, `USERNAME_TAKEN`;
+413 `LOGO_TOO_LARGE`; 415 `UNSUPPORTED_IMAGE_FORMAT`; 429 `TOO_MANY_ATTEMPTS` (con `Retry-After`);
+500 `INTERNAL_ERROR`; 503 `AUTH_UNAVAILABLE`, `STORAGE_UNAVAILABLE`.
 
 ### Sesiones del personal
 ```text
@@ -62,6 +77,26 @@ logout {refreshToken} ─► revoca la sesión
 curl -X POST "$URL/api/auth/login" -H "Content-Type: application/json" \
   -d '{"slug":"demo-cafe","username":"caja1","password":"..."}'
 curl "$URL/api/auth/me" -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+### Perfil y logo del negocio
+- Solo OWNER (CASHIER → 403 `FORBIDDEN`; sin token → 401). El negocio sale del token: las rutas no
+  llevan slug ni tenantId, y si el cuerpo o la query los traen se ignoran.
+- Cada cambio escribe `TenantChanged` en `loyalty.outbox` en la misma transacción, con la fila del negocio
+  bloqueada (`SELECT ... FOR UPDATE`). Un PUT que no cambia nada no escribe ni avisa.
+- Logo: máximo 2 MB (413 `LOGO_TOO_LARGE`). Se aceptan PNG, JPEG y WebP según sus primeros bytes
+  (magic bytes), nunca por Content-Type ni extensión; SVG y lo demás → 415 `UNSUPPORTED_IMAGE_FORMAT`.
+  Ancho y alto se leen de la cabecera antes de decodificar: más de 4000 px por lado → 400
+  `IMAGE_DIMENSIONS_TOO_LARGE` (protege contra imágenes bomba). Imagen dañada → 400 `INVALID_IMAGE`.
+- Se normaliza a un PNG de 512 × 512 (recorte cuadrado centrado, sin metadatos) y se guarda en el bucket
+  como `tenants/{tenantId}/logo-{sha256}.png`, con `Cache-Control: public, max-age=31536000, immutable`.
+  El nombre cambia con el contenido, así que la caché se invalida sola. Al reemplazar o quitar el logo se
+  borra el objeto anterior después de confirmar el cambio en la base.
+- `logoUrl` es la URL pública del objeto (bucket con lectura pública), la misma que devuelve
+  `GET /api/public/tenants/{slug}/identity` y la que recibe el wallet-service en `TenantChanged`.
+
+```bash
+curl -X PUT "$URL/api/staff/tenant/logo" -H "Authorization: Bearer $ACCESS_TOKEN" -F "file=@logo.webp"
 ```
 
 ### Autenticación de la API admin
@@ -91,7 +126,9 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 ```bash
 ./gradlew test
 ```
-`TenantIdentityQueryAdapterIT`, `AdminFlowIT` y `AuthFlowIT` usan Testcontainers (requieren Docker; se omiten si no hay).
+`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `TenantProfileFlowIT` y `GcsLogoStorageIT`
+(contra `fsouza/fake-gcs-server`) usan Testcontainers (requieren Docker; se omiten si no hay).
+Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JDK no escribe WebP.
 
 ## Configuración
 | Variable | Descripción | Por defecto |
@@ -109,6 +146,11 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 | `LOGIN_WINDOW_MINUTES` | Ventana de los fallos y duración del bloqueo | 15 |
 | `PASSWORD_MIN_LENGTH` | Largo mínimo de contraseña (máximo fijo: 72 bytes, límite de bcrypt) | 8 |
 | `BCRYPT_STRENGTH` | Costo de bcrypt | 12 |
+| `LOGOS_BUCKET` | Bucket de logos (Terraform: `<project_id>-logos`; lo pone en Cloud Run). Sin él, subir un logo responde 503 `STORAGE_UNAVAILABLE` | vacía |
+| `LOGOS_PUBLIC_BASE_URL` | Base de las URLs públicas de los logos (p. ej. un CDN) | `https://storage.googleapis.com/<LOGOS_BUCKET>` |
+
+Cloud Storage usa Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
+En local no hace falta: el cliente se crea al primer uso.
 
 `DATABASE_URL` también acepta la cadena copiada como comando de Neon (`psql 'postgresql://...'`).
 
@@ -126,7 +168,7 @@ Variables del repo: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEP
 ```
 application/{command,query,handler,validator}
 domain/{model,port/out}
-adapter/in/web{,/admin,/auth}  ·  adapter/out/persist/{command,query}  ·  adapter/out/security
+adapter/in/web{,/admin,/auth,/staff}  ·  adapter/out/persist/{command,query}  ·  adapter/out/{security,image,storage}
 config
 resources/{db/migration, sql}
 ```

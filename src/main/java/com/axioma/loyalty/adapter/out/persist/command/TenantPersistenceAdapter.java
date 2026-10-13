@@ -35,6 +35,16 @@ public class TenantPersistenceAdapter implements TenantRepository {
         return repository.findBySlug(slug.value()).map(TenantPersistenceAdapter::toDomain);
     }
 
+    @Override
+    public Mono<Tenant> findByIdForUpdate(UUID tenantId) {
+        return repository.findForUpdateById(tenantId).map(TenantPersistenceAdapter::toDomain);
+    }
+
+    @Override
+    public Mono<Tenant> update(Tenant tenant) {
+        return repository.save(toEntity(tenant, false)).map(TenantPersistenceAdapter::toDomain);
+    }
+
     private static TenantEntity toEntity(Tenant tenant, boolean isNew) {
         return new TenantEntity(
                 tenant.id(),
@@ -42,6 +52,7 @@ public class TenantPersistenceAdapter implements TenantRepository {
                 tenant.name(),
                 tenant.description(),
                 tenant.logoUrl(),
+                tenant.logoObjectKey(),
                 tenant.brandColor(),
                 tenant.pointsGoal(),
                 tenant.rewardText(),
@@ -58,6 +69,7 @@ public class TenantPersistenceAdapter implements TenantRepository {
                 entity.getBusinessName(),
                 entity.getDescription(),
                 entity.getLogoUrl(),
+                entity.getLogoObjectKey(),
                 entity.getBrandColor(),
                 entity.getPointsGoal(),
                 entity.getRewardText(),
