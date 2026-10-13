@@ -115,6 +115,28 @@ class ActivationFlowIT {
     }
 
     @Test
+    void ownerBodyWithoutPasswordKeyCreatesPendingAccount() {
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+
+        // Exactamente el cuerpo de n8n: username, name y role, sin la clave password.
+        String body = """
+                {"username": "admin", "name": "Admin Las Carnitas", "role": "OWNER"}
+                """;
+        assertThat(body).doesNotContain("password");
+        client.post().uri("/api/admin/tenants/{t}/users", tenantId)
+                .header("Authorization", "Bearer n8n-token")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.username").isEqualTo("admin")
+                .jsonPath("$.role").isEqualTo("OWNER")
+                .jsonPath("$.activation.token").exists();
+    }
+
+    @Test
     void createUserWithPasswordBehavesAsBefore() {
         String slug = newSlug();
         UUID tenantId = createTenant(slug);
