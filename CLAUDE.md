@@ -54,3 +54,18 @@ Manifest de la PWA de caja (`GET /caja/{slug}/manifest.webmanifest`; `TenantMani
 - `GetTenantManifestHandler` reutiliza `GetTenantIdentityHandler`; `TenantManifest.of` arma el contenido. Solo datos
   de la identidad pública. Inexistente, inactivo o slug inválido -> 404 sin cuerpo (no `ApiError`).
 - `application/manifest+json`, `Cache-Control: public, max-age=300`. `short_name` máx. 12 code points sin partir palabras.
+
+Activación por enlace (`POST .../users` sin `password`, `POST .../activation-link`, `/api/auth/activation/inspect`,
+`/api/auth/activate`):
+- Pendiente = `credential_hash` NULL (V4; sin columna de estado). Login de una pendiente -> `INVALID_CREDENTIALS`
+  idéntico (bcrypt ficticio). `find-active-principal.sql` y `rotate-refresh-token.sql` exigen credencial.
+- Token: 256 bits base64url (`SecureActivationTokenGenerator`), en `loyalty.activation_tokens` solo su SHA-256,
+  72 h, un uso; emitir otro o `reset-password` invalidan los anteriores (`used_at`). Nunca registrar el token,
+  su hash ni la `activationUrl`; commands/requests/responses con token sobrescriben `toString`.
+- Cualquier fallo de inspect/activate -> 400 `INVALID_ACTIVATION` con el mismo cuerpo, sin distinguir causa.
+  `activate`: `TokenIssuer.ensureReady()` y política (`PasswordPolicy`, la misma del alta) antes de consumir;
+  bcrypt fuera de la transacción; `AccountActivationWriter` hace consumo + hash + revocación de sesiones +
+  invalidación de enlaces en una transacción; luego `SessionStarter` (compartido con el login).
+- Límite (`ActivationThrottle`, `loyalty.activation_attempts`): por slug + IP y por slug, exista o no el slug.
+- `APP_WEB_BASE_URL` arma `activationUrl` (`/caja/{slug}/activar#t={token}`); sin ella se omite el campo.
+

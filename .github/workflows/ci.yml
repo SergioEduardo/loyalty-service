@@ -52,6 +52,7 @@ jobs:
           env_vars: |
             ADMIN_AUDIENCE=${{ vars.ADMIN_AUDIENCE }}
             ADMIN_ALLOWED_EMAILS=${{ vars.ADMIN_ALLOWED_EMAILS }}
+            APP_WEB_BASE_URL=${{ vars.APP_WEB_BASE_URL }}
           secrets: |
             DATABASE_URL=neon-database-url:latest
             JWT_SIGNING_KEY=jwt-signing-key:latest

@@ -4,8 +4,6 @@ import com.axioma.loyalty.application.command.LoginCommand;
 import com.axioma.loyalty.application.validator.LoginValidator;
 import com.axioma.loyalty.config.AuthProperties;
 import com.axioma.loyalty.domain.model.AuthSession;
-import com.axioma.loyalty.domain.model.NewSession;
-import com.axioma.loyalty.domain.model.SessionOwner;
 import com.axioma.loyalty.domain.model.Slug;
 import com.axioma.loyalty.domain.model.Tenant;
 import com.axioma.loyalty.domain.model.UserAccount;
@@ -14,16 +12,10 @@ import com.axioma.loyalty.domain.model.error.LoyaltyException;
 import com.axioma.loyalty.domain.model.error.TooManyAttemptsException;
 import com.axioma.loyalty.domain.port.out.LoginAttemptStore;
 import com.axioma.loyalty.domain.port.out.PasswordHasher;
-import com.axioma.loyalty.domain.port.out.RefreshTokenGenerator;
-import com.axioma.loyalty.domain.port.out.SessionRepository;
 import com.axioma.loyalty.domain.port.out.TenantRepository;
 import com.axioma.loyalty.domain.port.out.TokenIssuer;
 import com.axioma.loyalty.domain.port.out.UserRepository;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -46,10 +38,8 @@ public class LoginHandler implements Handler<LoginCommand, Mono<AuthSession>> {
     private final UserRepository userRepository;
     private final PasswordHasher passwordHasher;
     private final LoginAttemptStore loginAttempts;
-    private final SessionRepository sessionRepository;
-    private final RefreshTokenGenerator refreshTokens;
+    private final SessionStarter sessionStarter;
     private final AuthProperties properties;
-    private final Clock clock;
 
     @Override
     public Mono<AuthSession> handle(LoginCommand command) {
@@ -78,7 +68,8 @@ public class LoginHandler implements Handler<LoginCommand, Mono<AuthSession>> {
 
     /**
      * Exactamente un bcrypt por intento: contra el hash de la cuenta o, si no hay cuenta activa
-     * con contraseña, contra el ficticio.
+     * con contraseña, contra el ficticio. Una cuenta pendiente de activación no tiene hash: cae en
+     * el ficticio y responde igual que una contraseña incorrecta.
      */
     private Mono<AuthSession> checkPassword(Tenant tenant, LoginCommand command) {
         return userRepository.findByUsername(tenant.id(), command.username())
@@ -88,7 +79,7 @@ public class LoginHandler implements Handler<LoginCommand, Mono<AuthSession>> {
                 .flatMap(user -> passwordHasher
                         .matches(command.password(), user.map(UserAccount::credentialHash).orElse(null))
                         .flatMap(ok -> ok && user.isPresent()
-                                ? startSession(tenant, user.get())
+                                ? sessionStarter.start(user.get(), tenant.slug().value(), tenant.name())
                                 : recordFailure(tenant, command.username())));
     }
 
@@ -105,19 +96,5 @@ public class LoginHandler implements Handler<LoginCommand, Mono<AuthSession>> {
     private Mono<AuthSession> rejectWithoutAccount(String password) {
         return passwordHasher.matches(password, null)
                 .then(Mono.error(new LoyaltyException(ErrorCode.INVALID_CREDENTIALS)));
-    }
-
-    private Mono<AuthSession> startSession(Tenant tenant, UserAccount user) {
-        String refreshToken = refreshTokens.generate();
-        Instant expiresAt = Instant.now(clock).plus(Duration.ofDays(properties.refreshTokenTtlDays()));
-        var session = new NewSession(UUID.randomUUID(), tenant.id(), user.id(),
-                refreshTokens.hash(refreshToken), expiresAt);
-        var owner = new SessionOwner(session.id(), tenant.id(), user.id(), user.name(), user.role(),
-                tenant.slug().value(), tenant.name());
-        return loginAttempts.clear(tenant.id(), user.username())
-                .then(sessionRepository.create(session))
-                .then(Mono.defer(() -> SessionTokens.issue(tokenIssuer, owner, refreshToken)))
-                .doOnNext(auth -> log.info("Login ok tenantId={} userId={} sessionId={}",
-                        tenant.id(), user.id(), session.id()));
     }
 }

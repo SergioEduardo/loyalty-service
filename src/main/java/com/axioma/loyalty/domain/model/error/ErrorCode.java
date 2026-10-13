@@ -17,6 +17,8 @@ public enum ErrorCode {
     WEAK_PASSWORD("La contraseña no cumple los requisitos."),
     USERNAME_TAKEN("Ese usuario ya existe en el negocio."),
     USER_NOT_FOUND("No se encontró la cuenta."),
+    USER_INACTIVE("La cuenta está desactivada."),
+    INVALID_ACTIVATION("El enlace no es válido o ya venció. Pide uno nuevo."),
     INVALID_CREDENTIALS("Negocio, usuario o contraseña incorrectos."),
     TOO_MANY_ATTEMPTS("Demasiados intentos. Espera unos minutos e intenta de nuevo."),
     INVALID_SESSION("La sesión no es válida. Inicia sesión de nuevo."),

@@ -4,6 +4,7 @@ import com.axioma.loyalty.application.command.ResetPasswordCommand;
 import com.axioma.loyalty.application.validator.ResetPasswordValidator;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
+import com.axioma.loyalty.domain.port.out.ActivationTokenRepository;
 import com.axioma.loyalty.domain.port.out.PasswordHasher;
 import com.axioma.loyalty.domain.port.out.SessionRevoker;
 import com.axioma.loyalty.domain.port.out.UserRepository;
@@ -12,7 +13,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.publisher.Mono;
 
-/** Cambia la contraseña y revoca las sesiones abiertas con la anterior. */
+/**
+ * Cambia la contraseña, revoca las sesiones abiertas con la anterior e invalida los enlaces de
+ * activación pendientes (si no, uno viejo podría reemplazar la contraseña nueva).
+ */
 @Service
 @RequiredArgsConstructor
 public class ResetPasswordHandler implements Handler<ResetPasswordCommand, Mono<Void>> {
@@ -22,6 +26,7 @@ public class ResetPasswordHandler implements Handler<ResetPasswordCommand, Mono<
     private final PasswordHasher passwordHasher;
     private final UserRepository userRepository;
     private final SessionRevoker sessionRevoker;
+    private final ActivationTokenRepository activationTokens;
 
     @Override
     @Transactional
@@ -33,6 +38,6 @@ public class ResetPasswordHandler implements Handler<ResetPasswordCommand, Mono<
                 .flatMap(user -> passwordHasher.hash(command.newPassword()).map(user::withCredentialHash))
                 .flatMap(userRepository::update)
                 .then(Mono.defer(() -> sessionRevoker.revokeAllByUser(command.tenantId(), command.userId())))
-                .then();
+                .then(Mono.defer(() -> activationTokens.invalidateAll(command.tenantId(), command.userId())));
     }
 }

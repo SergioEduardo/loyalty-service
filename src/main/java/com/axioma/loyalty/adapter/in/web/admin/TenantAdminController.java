@@ -1,10 +1,12 @@
 package com.axioma.loyalty.adapter.in.web.admin;
 
 import com.axioma.loyalty.application.command.DeactivateUserCommand;
+import com.axioma.loyalty.application.command.IssueActivationLinkCommand;
 import com.axioma.loyalty.application.command.ResetPasswordCommand;
 import com.axioma.loyalty.application.handler.CreateTenantHandler;
 import com.axioma.loyalty.application.handler.CreateUserHandler;
 import com.axioma.loyalty.application.handler.DeactivateUserHandler;
+import com.axioma.loyalty.application.handler.IssueActivationLinkHandler;
 import com.axioma.loyalty.application.handler.ResetPasswordHandler;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
@@ -32,6 +34,7 @@ public class TenantAdminController {
     private final CreateUserHandler createUserHandler;
     private final DeactivateUserHandler deactivateUserHandler;
     private final ResetPasswordHandler resetPasswordHandler;
+    private final IssueActivationLinkHandler issueActivationLinkHandler;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -59,5 +62,12 @@ public class TenantAdminController {
             return Mono.error(new LoyaltyException(ErrorCode.INVALID_REQUEST));
         }
         return resetPasswordHandler.handle(new ResetPasswordCommand(tenantId, userId, request.password()));
+    }
+
+    /** Enlace nuevo de activación (reenvío o cambio de contraseña por enlace); invalida los anteriores. */
+    @PostMapping("/{tenantId}/users/{userId}/activation-link")
+    public Mono<ActivationLinkResponse> issueActivationLink(@PathVariable UUID tenantId, @PathVariable UUID userId) {
+        return issueActivationLinkHandler.handle(new IssueActivationLinkCommand(tenantId, userId))
+                .map(ActivationLinkResponse::from);
     }
 }

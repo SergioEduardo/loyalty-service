@@ -11,6 +11,7 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 - Login, sesiones (access + refresh con rotación) y roles del personal.
 - Perfil del negocio para el dueño: identidad, configuración del programa y logo (Cloud Storage).
 - Manifest de la PWA de caja por negocio (`/caja/{slug}/manifest.webmanifest`).
+- Activación de cuentas por enlace de un solo uso (la persona elige su contraseña).
 
 ## Endpoints
 | Método y ruta | Respuesta | Descripción |
@@ -18,12 +19,15 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 | `GET /api/public/tenants/{slug}/identity` | 200 | Identidad pública del negocio (sin autenticación) |
 | `GET /caja/{slug}/manifest.webmanifest` | 200 | Manifest de la PWA de caja del negocio (sin autenticación; 404 sin cuerpo si no existe o está inactivo) |
 | `POST /api/admin/tenants` | 201 | Alta de negocio y aviso `TenantChanged` en `loyalty.outbox` |
-| `POST /api/admin/tenants/{tenantId}/users` | 201 | Alta de cuenta (`CASHIER` u `OWNER`) |
+| `POST /api/admin/tenants/{tenantId}/users` | 201 | Alta de cuenta (`CASHIER` u `OWNER`); sin `password` queda pendiente y devuelve `activation` |
 | `POST /api/admin/tenants/{tenantId}/users/{userId}/deactivate` | 204 | Desactiva la cuenta y revoca sus sesiones |
-| `POST /api/admin/tenants/{tenantId}/users/{userId}/reset-password` | 204 | Cambia la contraseña y revoca sus sesiones |
+| `POST /api/admin/tenants/{tenantId}/users/{userId}/reset-password` | 204 | Cambia la contraseña, revoca sus sesiones e invalida sus enlaces de activación |
+| `POST /api/admin/tenants/{tenantId}/users/{userId}/activation-link` | 200 | Enlace de activación nuevo (reenvío o cambio de contraseña por enlace); invalida los anteriores |
 | `POST /api/auth/login` | 200 | Inicio de sesión del personal: `{slug, username, password}` |
 | `POST /api/auth/refresh` | 200 | Renueva la sesión: `{refreshToken}`; devuelve un refresh nuevo |
 | `POST /api/auth/logout` | 204 | Cierra la sesión: `{refreshToken}`; idempotente |
+| `POST /api/auth/activation/inspect` | 200 | A quién pertenece un enlace: `{slug, token}` → `{tenantName, username}` |
+| `POST /api/auth/activate` | 200 | Elige la contraseña con el enlace: `{slug, token, password}`; misma respuesta que `/login` |
 | `GET /api/auth/me` | 200 | Quién soy, según el access token: `{userId, tenantId, role, sessionId}` |
 | `GET /api/staff/tenant` | 200 | Perfil del negocio del token (solo OWNER) |
 | `PUT /api/staff/tenant/identity` | 200 | Nombre, descripción y color (solo OWNER); devuelve el perfil |
@@ -36,8 +40,14 @@ Cuerpos (JSON):
 // POST /api/admin/tenants  (cooldownSeconds default 0, undoWindowSeconds default 300)
 { "slug": "mi-cafe", "name": "Mi Café", "description": "Bienvenido", "brandColor": "#112233",
   "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 }
-// POST .../users  (username se guarda recortado y en minúsculas; name opcional, default = username)
+// POST .../users  (username se guarda recortado y en minúsculas; name opcional, default = username;
+//                 password opcional: sin ella la cuenta queda pendiente de activación)
 { "username": "ana", "password": "al-menos-8", "role": "CASHIER", "name": "Ana" }
+// Respuesta 201 (activation solo si no llegó password)
+{ "id": "…", "tenantId": "…", "name": "Ana", "username": "ana", "role": "OWNER", "active": true,
+  "activation": { "token": "<43 caracteres base64url>", "expiresAt": "2026-10-16T12:00:00Z",
+                  "activationUrl": "https://axioma-loyalty-dev-web.web.app/caja/mi-cafe/activar#t=<token>" } }
+// Respuesta de POST .../activation-link: el mismo objeto que "activation"
 // POST .../reset-password
 { "password": "nueva-clave" }
 // Respuesta de GET/PUT /api/staff/tenant/**
@@ -50,9 +60,9 @@ Cuerpos (JSON):
 { "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 }
 ```
 Errores: `{ "code": "...", "message": "..." }`. 400 `INVALID_SLUG`, `INVALID_TEXT`,
-`INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`,
+`INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`, `INVALID_ACTIVATION`,
 `INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`; 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`, `INVALID_SESSION`;
-403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`, `USERNAME_TAKEN`;
+403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`, `USERNAME_TAKEN`, `USER_INACTIVE`;
 413 `LOGO_TOO_LARGE`; 415 `UNSUPPORTED_IMAGE_FORMAT`; 429 `TOO_MANY_ATTEMPTS` (con `Retry-After`);
 500 `INTERNAL_ERROR`; 503 `AUTH_UNAVAILABLE`, `STORAGE_UNAVAILABLE`.
 
@@ -80,6 +90,31 @@ curl -X POST "$URL/api/auth/login" -H "Content-Type: application/json" \
   -d '{"slug":"demo-cafe","username":"caja1","password":"..."}'
 curl "$URL/api/auth/me" -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
+
+### Activación por enlace
+```text
+n8n: POST /api/admin/tenants/{id}/users {username, role}            (sin password)
+     └─► 201 { ..., activation: { token, expiresAt, activationUrl } }
+PWA: /caja/{slug}/activar#t={token}   (el token va en el fragmento: no llega a ningún servidor)
+     ├─ POST /api/auth/activation/inspect {slug, token}           ─► { tenantName, username }
+     └─ POST /api/auth/activate {slug, token, password}           ─► tokens de sesión (igual que /login)
+```
+- Token de 256 bits en base64url; en `loyalty.activation_tokens` solo su SHA-256. Vence a las 72 h y sirve
+  una vez. Emitir otro (`activation-link`) o un `reset-password` del admin invalida los anteriores.
+- Cuenta pendiente = cuenta sin credencial (`credential_hash` NULL). El login le responde
+  `INVALID_CREDENTIALS` igual que a una contraseña incorrecta (con el mismo bcrypt ficticio) y el filtro de
+  staff y el refresh no aceptan sesiones de cuentas sin credencial.
+- `activation-link` sobre una cuenta activa es un cambio de contraseña por enlace: la contraseña actual
+  sirve hasta que se use el enlace. Cuenta desactivada → 409 `USER_INACTIVE`.
+- `activate`, en una transacción: marca el enlace usado (si sigue válido), guarda el hash bcrypt (la cuenta
+  queda activada), revoca todas sus sesiones e invalida sus otros enlaces. Después abre la sesión nueva.
+  La contraseña sigue la misma política que el alta (`WEAK_PASSWORD`); un rechazo por política no gasta el enlace.
+- Inexistente, vencido, usado, de otro negocio, cuenta o negocio inactivos: siempre 400
+  `INVALID_ACTIVATION`, con el mismo cuerpo, en inspect y activate.
+- Límite de fallos, como el login (429 `TOO_MANY_ATTEMPTS` + `Retry-After`): 5 por slug + IP y 20 por slug
+  en 15 minutos. Cuenta aunque el slug no exista. La IP sale del primer valor de `X-Forwarded-For`; como el
+  cliente puede falsearlo, el límite por slug es el que no se puede esquivar.
+- El token nunca se registra en logs ni va en eventos (solo `tenantId`, `userId` y `expiresAt`).
 
 ### Perfil y logo del negocio
 - Solo OWNER (CASHIER → 403 `FORBIDDEN`; sin token → 401). El negocio sale del token: las rutas no
@@ -149,7 +184,7 @@ Flyway crea los schemas `loyalty` y `wallet` al arrancar.
 ```bash
 ./gradlew test
 ```
-`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT` y `GcsLogoStorageIT`
+`TenantIdentityQueryAdapterIT`, `AdminFlowIT`, `AuthFlowIT`, `ActivationFlowIT`, `TenantProfileFlowIT`, `TenantManifestFlowIT` y `GcsLogoStorageIT`
 (contra `fsouza/fake-gcs-server`) usan Testcontainers (requieren Docker; se omiten si no hay).
 Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JDK no escribe WebP.
 
@@ -167,6 +202,11 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `REFRESH_TOKEN_TTL_DAYS` | Vigencia de la sesión desde el último refresh | 30 |
 | `LOGIN_MAX_ATTEMPTS` | Fallos por (negocio, usuario) antes de bloquear | 5 |
 | `LOGIN_WINDOW_MINUTES` | Ventana de los fallos y duración del bloqueo | 15 |
+| `APP_WEB_BASE_URL` | URL de la PWA para armar `activationUrl`. Dev: `https://axioma-loyalty-dev-web.web.app`. La pone el despliegue (`ci.yml`) desde la variable de repositorio `vars.APP_WEB_BASE_URL`. Sin ella la API admin devuelve solo `token` y `expiresAt` | vacía |
+| `ACTIVATION_TOKEN_TTL_HOURS` | Vigencia de un enlace de activación | 72 |
+| `ACTIVATION_MAX_ATTEMPTS_PER_IP` | Fallos de activación por (slug, IP) antes de bloquear | 5 |
+| `ACTIVATION_MAX_ATTEMPTS_PER_SLUG` | Fallos de activación por slug antes de bloquear | 20 |
+| `ACTIVATION_WINDOW_MINUTES` | Ventana de esos fallos y duración del bloqueo | 15 |
 | `PASSWORD_MIN_LENGTH` | Largo mínimo de contraseña (máximo fijo: 72 bytes, límite de bcrypt) | 8 |
 | `BCRYPT_STRENGTH` | Costo de bcrypt | 12 |
 | `LOGOS_BUCKET` | Bucket de logos (Terraform: `<project_id>-logos`; lo pone en Cloud Run). Sin él, subir un logo responde 503 `STORAGE_UNAVAILABLE` | vacía |

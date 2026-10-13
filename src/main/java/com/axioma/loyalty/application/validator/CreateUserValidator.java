@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
 
+/** Sin contraseña (null) la cuenta queda pendiente de activación; si viene, debe cumplir la política. */
 @Component
 @RequiredArgsConstructor
 public class CreateUserValidator {
@@ -36,6 +37,8 @@ public class CreateUserValidator {
         } catch (LoyaltyException e) {
             throw new LoyaltyException(ErrorCode.INVALID_USER);
         }
-        passwordPolicy.check(command.password());
+        if (command.password() != null) {
+            passwordPolicy.check(command.password());
+        }
     }
 }
