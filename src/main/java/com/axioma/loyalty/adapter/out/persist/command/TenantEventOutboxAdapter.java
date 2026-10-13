@@ -19,14 +19,13 @@ public class TenantEventOutboxAdapter implements TenantEventOutbox {
     private final ObjectMapper objectMapper;
 
     @Override
-    public Mono<Void> append(TenantChanged event) {
+    public Mono<Long> append(TenantChanged event) {
         return Mono.fromCallable(() -> objectMapper.writeValueAsString(event))
                 .flatMap(payload -> databaseClient.sql(INSERT_EVENT)
                         .bind("tenantId", event.tenantId())
                         .bind("eventType", TenantChanged.EVENT_TYPE)
                         .bind("payload", payload)
-                        .fetch()
-                        .rowsUpdated())
-                .then();
+                        .map(row -> row.get("id", Long.class))
+                        .one());
     }
 }

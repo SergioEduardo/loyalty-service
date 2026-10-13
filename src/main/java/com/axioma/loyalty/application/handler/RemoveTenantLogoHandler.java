@@ -13,10 +13,12 @@ public class RemoveTenantLogoHandler implements Handler<RemoveTenantLogoCommand,
 
     private final TenantChangeWriter tenantChangeWriter;
     private final LogoCleanup logoCleanup;
+    private final OutboxFastPath outboxFastPath;
 
     @Override
     public Mono<Void> handle(RemoveTenantLogoCommand command) {
         return tenantChangeWriter.apply(command.tenantId(), Tenant::withoutLogo)
-                .flatMap(logoCleanup::deleteReplaced);
+                .flatMap(update -> outboxFastPath.publish(update.eventId())
+                        .then(Mono.defer(() -> logoCleanup.deleteReplaced(update))));
     }
 }

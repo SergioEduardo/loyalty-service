@@ -16,6 +16,7 @@ import com.axioma.loyalty.application.command.UpdateTenantIdentityCommand;
 import com.axioma.loyalty.application.command.UpdateTenantSettingsCommand;
 import com.axioma.loyalty.application.command.UploadTenantLogoCommand;
 import com.axioma.loyalty.application.handler.LogoCleanup;
+import com.axioma.loyalty.application.handler.OutboxFastPath;
 import com.axioma.loyalty.application.handler.RemoveTenantLogoHandler;
 import com.axioma.loyalty.application.handler.TenantChangeWriter;
 import com.axioma.loyalty.application.handler.UpdateTenantIdentityHandler;
@@ -30,7 +31,10 @@ import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.port.out.ImageNormalizerPort;
 import com.axioma.loyalty.domain.port.out.TenantEventOutbox;
 import com.axioma.loyalty.domain.port.out.TenantRepository;
+import com.axioma.loyalty.support.FakeEventPublisher;
 import com.axioma.loyalty.support.InMemoryLogoStorage;
+import com.axioma.loyalty.support.InMemoryOutboxEvents;
+import com.axioma.loyalty.support.OutboxFixtures;
 import com.axioma.loyalty.support.TestImages;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,15 +53,20 @@ class TenantProfileHandlersTest {
     private final InMemoryLogoStorage storage = new InMemoryLogoStorage();
     private final ImageNormalizerPort normalizer = new ImageIoImageNormalizer(Schedulers.immediate());
 
+    private final InMemoryOutboxEvents outboxEvents = new InMemoryOutboxEvents();
+    private final FakeEventPublisher publisher = new FakeEventPublisher(true);
+    private final OutboxFastPath fastPath =
+            OutboxFixtures.fastPath(outboxEvents, publisher, OutboxFixtures.properties(8, 100, 5_000));
+
     private final TenantChangeWriter writer = new TenantChangeWriter(tenants, outbox);
     private final LogoCleanup cleanup = new LogoCleanup(storage);
     private final UpdateTenantIdentityHandler updateIdentity =
-            new UpdateTenantIdentityHandler(new UpdateTenantIdentityValidator(), writer);
+            new UpdateTenantIdentityHandler(new UpdateTenantIdentityValidator(), writer, fastPath);
     private final UpdateTenantSettingsHandler updateSettings =
-            new UpdateTenantSettingsHandler(new UpdateTenantSettingsValidator(), writer);
+            new UpdateTenantSettingsHandler(new UpdateTenantSettingsValidator(), writer, fastPath);
     private final UploadTenantLogoHandler upload =
-            new UploadTenantLogoHandler(new UploadTenantLogoValidator(), normalizer, storage, writer, cleanup);
-    private final RemoveTenantLogoHandler remove = new RemoveTenantLogoHandler(writer, cleanup);
+            new UploadTenantLogoHandler(new UploadTenantLogoValidator(), normalizer, storage, writer, cleanup, fastPath);
+    private final RemoveTenantLogoHandler remove = new RemoveTenantLogoHandler(writer, cleanup, fastPath);
 
     @BeforeEach
     void repository() {
@@ -68,7 +77,8 @@ class TenantProfileHandlersTest {
             stored.set(inv.getArgument(0));
             return Mono.just(stored.get());
         });
-        when(outbox.append(any())).thenReturn(Mono.empty());
+        when(outbox.append(any())).thenAnswer(inv -> Mono.just(outboxEvents.add(
+                inv.<TenantChanged>getArgument(0).tenantId(), TenantChanged.EVENT_TYPE, "{}")));
     }
 
     @Test
@@ -210,5 +220,50 @@ class TenantProfileHandlersTest {
         StepVerifier.create(remove.handle(new RemoveTenantLogoCommand(TENANT_ID))).verifyComplete();
         assertThat(storage.deleted()).containsExactly(key);
         verify(outbox, times(2)).append(any()); // subida y borrado; el segundo borrado no avisa
+    }
+
+    // --- camino rápido (12.11) ---
+
+    @Test
+    void changePublishesItsEventInTheSameRequest() {
+        updateIdentity.handle(new UpdateTenantIdentityCommand(TENANT_ID, "Café Nuevo", null, "#112233")).block();
+
+        assertThat(publisher.confirmedIds()).containsExactly(1L);
+        assertThat(outboxEvents.row(1).status()).isEqualTo("PUBLISHED");
+    }
+
+    @Test
+    void unchangedTenantPublishesNothing() {
+        Tenant current = stored.get();
+        updateIdentity.handle(new UpdateTenantIdentityCommand(
+                TENANT_ID, current.name(), current.description(), current.brandColor())).block();
+
+        assertThat(publisher.attemptedIds()).isEmpty();
+    }
+
+    @Test
+    void failingPubSubLeavesTheEventPendingAndTheResponseUnchanged() {
+        publisher.mode(FakeEventPublisher.Mode.FAIL);
+
+        StepVerifier.create(updateSettings.handle(new UpdateTenantSettingsCommand(TENANT_ID, 8, "Postre", 60, 120)))
+                .assertNext(profile -> assertThat(profile.pointsGoal()).isEqualTo(8))
+                .verifyComplete();
+        assertThat(outboxEvents.row(1).status()).isEqualTo("PENDING");
+        assertThat(outboxEvents.row(1).event().attempts()).isEqualTo(1);
+    }
+
+    @Test
+    void slowPubSubIsCutAtTheFastPathTimeout() {
+        publisher.mode(FakeEventPublisher.Mode.HANG);
+
+        StepVerifier.create(remove.handle(new RemoveTenantLogoCommand(TENANT_ID)))
+                .verifyComplete(); // sin logo no hay aviso: no espera
+        StepVerifier.create(upload.handle(new UploadTenantLogoCommand(TENANT_ID, TestImages.png(300, 200))))
+                .expectNextCount(1)
+                .expectComplete()
+                .verify(java.time.Duration.ofSeconds(5));
+        assertThat(outboxEvents.row(1).status()).isEqualTo("PENDING");
+        assertThat(outboxEvents.row(1).event().attempts()).isZero(); // reclamado: lo retoma el Scheduler
+        assertThat(publisher.confirmed()).isEmpty();
     }
 }

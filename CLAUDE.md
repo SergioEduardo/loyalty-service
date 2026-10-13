@@ -69,3 +69,18 @@ Activación por enlace (`POST .../users` sin `password`, `POST .../activation-li
 - Límite (`ActivationThrottle`, `loyalty.activation_attempts`): por slug + IP y por slug, exista o no el slug.
 - `APP_WEB_BASE_URL` arma `activationUrl` (`/caja/{slug}/activar#t={token}`); sin ella se omite el campo.
 
+Publicación de avisos (outbox → Pub/Sub, diseño 12.11; `PublishPendingEventsHandler`):
+- Reclamo único para los dos caminos (`sql/outbox/claim-due.sql`, `claim-by-ids.sql`): una sentencia con
+  `FOR UPDATE SKIP LOCKED` que corre `next_attempt_at` el plazo `OUTBOX_CLAIM_LEASE_SECONDS`. Nunca publicar dentro
+  de una transacción ni retener bloqueos durante la llamada a Pub/Sub; `OutboxEventAdapter` va en autocommit.
+- Camino rápido: los handlers que escriben un aviso llaman a `OutboxFastPath.publish(eventId)` después del commit
+  (por eso el writer transaccional devuelve el id: `TenantUpdate.eventId`, `CreatedTenant`). Nunca falla ni cambia
+  la respuesta; tiene tope `OUTBOX_FAST_PATH_TIMEOUT_MS`. Un aviso nuevo de otro caso de uso debe seguir el mismo patrón.
+- Falla: attempts+1 y espera 5 s × 2^(attempts−1) con tope 15 min (`OutboxRetryPolicy`); al llegar a
+  `OUTBOX_MAX_ATTEMPTS`, `FAILED` + log ERROR. Logs con conteos e ids; nunca el payload (`OutboxEvent.toString` lo omite).
+- Mensaje: cuerpo = payload; atributos `eventType`, `tenantId`, `cardId` ("" si no hay), `seq` (= id del aviso).
+- Sin `PUBSUB_TOPIC`, publicación desactivada (`PubSubEventAdapter.disabled()`); el endpoint responde `disabled:true`.
+- `/internal/**` lo protege `InternalAuthFilter` (ID token de Google, `OUTBOX_PUBLISH_AUDIENCE` y
+  `OUTBOX_PUBLISH_ALLOWED_EMAILS`; vacías → 403). La validación del token es `GoogleIdTokenVerifier`, compartida con
+  `AdminTokenVerifier`. Todo endpoint nuevo bajo `/internal` queda detrás de ese filtro.
+- Pendiente: limpieza de avisos `PUBLISHED` antiguos y alerta sobre `FAILED`.

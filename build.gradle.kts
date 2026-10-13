@@ -38,6 +38,8 @@ dependencies {
     // Logos: Cloud Storage (credenciales por ADC) y lector WebP para ImageIO (el JDK solo trae PNG/JPEG/GIF/BMP)
     implementation(platform("com.google.cloud:libraries-bom:26.90.0"))
     implementation("com.google.cloud:google-cloud-storage")
+    // Avisos para el wallet-service (outbox -> Pub/Sub)
+    implementation("com.google.cloud:google-cloud-pubsub")
     implementation("com.twelvemonkeys.imageio:imageio-webp:3.15.3")
 
     // Migraciones (Flyway usa JDBC; la aplicacion usa R2DBC)
@@ -52,6 +54,7 @@ dependencies {
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:gcloud")
     testCompileOnly("org.projectlombok:lombok")
     testAnnotationProcessor("org.projectlombok:lombok")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

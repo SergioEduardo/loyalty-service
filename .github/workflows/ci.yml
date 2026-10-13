@@ -53,6 +53,12 @@ jobs:
             ADMIN_AUDIENCE=${{ vars.ADMIN_AUDIENCE }}
             ADMIN_ALLOWED_EMAILS=${{ vars.ADMIN_ALLOWED_EMAILS }}
             APP_WEB_BASE_URL=${{ vars.APP_WEB_BASE_URL }}
+            PUBSUB_TOPIC=${{ vars.PUBSUB_TOPIC }}
+            OUTBOX_BATCH_SIZE=${{ vars.OUTBOX_BATCH_SIZE }}
+            OUTBOX_MAX_ATTEMPTS=${{ vars.OUTBOX_MAX_ATTEMPTS }}
+            OUTBOX_FAST_PATH_TIMEOUT_MS=${{ vars.OUTBOX_FAST_PATH_TIMEOUT_MS }}
+            OUTBOX_PUBLISH_AUDIENCE=${{ vars.OUTBOX_PUBLISH_AUDIENCE }}
+            OUTBOX_PUBLISH_ALLOWED_EMAILS=${{ vars.OUTBOX_PUBLISH_ALLOWED_EMAILS }}
           secrets: |
             DATABASE_URL=neon-database-url:latest
             JWT_SIGNING_KEY=jwt-signing-key:latest
