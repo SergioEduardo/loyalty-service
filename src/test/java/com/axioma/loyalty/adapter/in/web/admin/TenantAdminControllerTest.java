@@ -42,7 +42,7 @@ class TenantAdminControllerTest {
     @Test
     void createsTenant() {
         when(createTenant.handle(any())).thenReturn(Mono.just(new Tenant(TENANT_ID, new Slug("mi-cafe"),
-                "Mi Café", null, null, "#112233", 10, "Café gratis", 0, 300, true)));
+                "Mi Café", null, null, null, "#112233", 10, "Café gratis", 0, 300, true)));
 
         client.post().uri("/api/admin/tenants")
                 .contentType(MediaType.APPLICATION_JSON)

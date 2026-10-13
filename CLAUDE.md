@@ -35,3 +35,15 @@ Sesiones del personal (`/api/auth/**`, públicas salvo `/me`):
   `loyalty.login_attempts` -> 429 `TOO_MANY_ATTEMPTS` con `Retry-After`.
 - Nunca registrar tokens, hashes de tokens ni `JWT_SIGNING_KEY`. Migraciones nuevas en `V{n}__*.sql`;
   nunca editar una ya aplicada.
+
+Perfil del negocio (`/api/staff/tenant/**`, solo OWNER; `TenantProfileController`):
+- `GET /api/staff/tenant`, `PUT /identity`, `PUT /settings`, `PUT /logo` (multipart, campo `file`),
+  `DELETE /logo` (204, idempotente). El negocio sale del `StaffPrincipal`; nunca de la ruta, query ni cuerpo.
+- Todo cambio al negocio pasa por `TenantChangeWriter`: fila bloqueada (`FOR UPDATE`), update y `TenantChanged`
+  en la misma transacción; si nada cambia, no escribe ni avisa.
+- Logo: formato por magic bytes (`ImageFormat`), nunca por Content-Type/extensión; solo PNG/JPEG/WebP (WebP con
+  TwelveMonkeys `imageio-webp`). Dimensiones leídas de la cabecera antes de decodificar (máx. 4000 px por lado).
+  El procesamiento corre en `imageProcessingScheduler` (2 hilos), nunca en el event loop.
+- Objeto `tenants/{tenantId}/logo-{sha256}.png`, Cache-Control público de 1 año (inmutable). Se sube fuera de
+  la transacción; el anterior se borra después del commit y un fallo al borrarlo solo se registra.
+- Bucket por `LOGOS_BUCKET` y ADC (sin llaves). `logo_url` (pública) y `logo_object_key` se llenan juntas.

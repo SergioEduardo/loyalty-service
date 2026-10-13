@@ -36,7 +36,8 @@ public class CreateTenantHandler implements Handler<CreateTenantCommand, Mono<Te
                 new Slug(command.slug()),
                 command.name(),
                 command.description(),
-                null, // el logo se sube y normaliza en otra entrega
+                null, // el logo lo sube el dueño (UploadTenantLogoHandler)
+                null,
                 command.brandColor(),
                 command.pointsGoal(),
                 command.rewardText(),

@@ -20,7 +20,7 @@ final class AdminFixtures {
     }
 
     static Tenant tenant(boolean active) {
-        return new Tenant(TENANT_ID, new Slug("mi-cafe"), "Mi Café", null, null, "#112233", 10,
+        return new Tenant(TENANT_ID, new Slug("mi-cafe"), "Mi Café", null, null, null, "#112233", 10,
                 "Café gratis", 0, 300, active);
     }
 
