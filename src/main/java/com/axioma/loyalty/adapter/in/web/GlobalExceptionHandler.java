@@ -2,7 +2,9 @@ package com.axioma.loyalty.adapter.in.web;
 
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
+import com.axioma.loyalty.domain.model.error.TooManyAttemptsException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -17,13 +19,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(LoyaltyException.class)
     public ResponseEntity<ApiError> handleBusiness(LoyaltyException ex) {
         HttpStatus status = ErrorHttpStatus.of(ex.getCode());
-        if (status.is5xxServerError()) {
+        if (ex.getCode() == ErrorCode.INTERNAL_ERROR) {
             log.error("Business error code={}", ex.getCode(), ex);
+        } else if (status.is5xxServerError()) {
+            log.warn("Business error code={}", ex.getCode());
         } else {
             log.info("Business error code={}", ex.getCode());
         }
-        return ResponseEntity.status(status)
-                .body(new ApiError(ex.getCode().name(), ex.getMessage()));
+        var response = ResponseEntity.status(status);
+        if (ex instanceof TooManyAttemptsException tooMany) {
+            response.header(HttpHeaders.RETRY_AFTER, Long.toString(tooMany.getRetryAfterSeconds()));
+        }
+        return response.body(new ApiError(ex.getCode().name(), ex.getMessage()));
     }
 
     /** Rutas inexistentes, cuerpos mal formados, parámetros inválidos. */

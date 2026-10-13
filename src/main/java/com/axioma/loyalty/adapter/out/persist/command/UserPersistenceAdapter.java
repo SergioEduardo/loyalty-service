@@ -35,6 +35,11 @@ public class UserPersistenceAdapter implements UserRepository {
         return repository.findByTenantIdAndId(tenantId, userId).map(UserPersistenceAdapter::toDomain);
     }
 
+    @Override
+    public Mono<UserAccount> findByUsername(UUID tenantId, String username) {
+        return repository.findByTenantIdAndUsername(tenantId, username).map(UserPersistenceAdapter::toDomain);
+    }
+
     private static UserEntity toEntity(UserAccount user, boolean isNew) {
         return new UserEntity(
                 user.id(),

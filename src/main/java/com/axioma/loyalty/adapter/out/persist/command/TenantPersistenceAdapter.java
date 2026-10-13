@@ -30,6 +30,11 @@ public class TenantPersistenceAdapter implements TenantRepository {
         return repository.findById(tenantId).map(TenantPersistenceAdapter::toDomain);
     }
 
+    @Override
+    public Mono<Tenant> findBySlug(Slug slug) {
+        return repository.findBySlug(slug.value()).map(TenantPersistenceAdapter::toDomain);
+    }
+
     private static TenantEntity toEntity(Tenant tenant, boolean isNew) {
         return new TenantEntity(
                 tenant.id(),

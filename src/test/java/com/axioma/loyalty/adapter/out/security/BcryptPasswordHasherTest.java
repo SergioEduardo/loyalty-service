@@ -26,4 +26,18 @@ class BcryptPasswordHasherTest {
             scheduler.dispose();
         }
     }
+
+    @Test
+    void comparesAgainstDummyHashWhenThereIsNoAccount() {
+        var scheduler = Schedulers.newBoundedElastic(1, 10, "password-hash-test");
+        var hasher = new BcryptPasswordHasher(new BCryptPasswordEncoder(4), scheduler);
+        try {
+            String hash = hasher.hash("secreto123").block();
+            StepVerifier.create(hasher.matches("secreto123", hash)).expectNext(true).verifyComplete();
+            StepVerifier.create(hasher.matches("otra", hash)).expectNext(false).verifyComplete();
+            StepVerifier.create(hasher.matches("cuenta-inexistente", null)).expectNext(false).verifyComplete();
+        } finally {
+            scheduler.dispose();
+        }
+    }
 }

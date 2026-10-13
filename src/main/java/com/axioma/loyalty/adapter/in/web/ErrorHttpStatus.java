@@ -12,7 +12,9 @@ final class ErrorHttpStatus {
         return switch (code) {
             case INVALID_SLUG, INVALID_TEXT, INVALID_BRAND_COLOR, INVALID_SETTINGS, INVALID_USER,
                  WEAK_PASSWORD, INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
-            case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
+            case UNAUTHORIZED, INVALID_CREDENTIALS, INVALID_SESSION -> HttpStatus.UNAUTHORIZED;
+            case TOO_MANY_ATTEMPTS -> HttpStatus.TOO_MANY_REQUESTS;
+            case AUTH_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case TENANT_NOT_FOUND, USER_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case SLUG_ALREADY_EXISTS, USERNAME_TAKEN -> HttpStatus.CONFLICT;

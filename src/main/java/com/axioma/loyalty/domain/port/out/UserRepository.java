@@ -13,4 +13,7 @@ public interface UserRepository {
 
     /** Vacío si no existe o pertenece a otro negocio. */
     Mono<UserAccount> findById(UUID tenantId, UUID userId);
+
+    /** Vacío si no existe en ese negocio. */
+    Mono<UserAccount> findByUsername(UUID tenantId, String username);
 }

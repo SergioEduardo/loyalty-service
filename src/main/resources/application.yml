@@ -29,3 +29,9 @@ app:
   admin:
     audience: ${ADMIN_AUDIENCE:}
     allowed-emails: ${ADMIN_ALLOWED_EMAILS:}
+  auth:
+    jwt-signing-key: ${JWT_SIGNING_KEY:}
+    access-token-ttl-seconds: ${ACCESS_TOKEN_TTL_SECONDS:900}
+    refresh-token-ttl-days: ${REFRESH_TOKEN_TTL_DAYS:30}
+    login-max-attempts: ${LOGIN_MAX_ATTEMPTS:5}
+    login-window-minutes: ${LOGIN_WINDOW_MINUTES:15}
