@@ -60,3 +60,17 @@ app:
     claim-lease-seconds: ${OUTBOX_CLAIM_LEASE_SECONDS:120}
     publish-audience: ${OUTBOX_PUBLISH_AUDIENCE:}
     publish-allowed-emails: ${OUTBOX_PUBLISH_ALLOWED_EMAILS:}
+  enroll:
+    phone-limit-per-hour: ${ENROLL_PHONE_LIMIT_PER_HOUR:3}
+    ip-limit-per-hour: ${ENROLL_IP_LIMIT_PER_HOUR:10}
+    tenant-limit-per-hour: ${ENROLL_TENANT_LIMIT_PER_HOUR:60}
+    card-ip-limit-per-hour: ${ENROLL_CARD_IP_LIMIT_PER_HOUR:30}
+    code-ttl-minutes: ${ENROLL_CODE_TTL_MINUTES:10}
+    max-attempts: ${ENROLL_MAX_ATTEMPTS:5}
+    otp-hash-salt: ${OTP_HASH_SALT:}
+    verification-sender: ${VERIFICATION_SENDER:disabled}
+    app-env: ${APP_ENV:}
+  wallet:
+    service-url: ${WALLET_SERVICE_URL:}
+    audience: ${WALLET_SERVICE_AUDIENCE:}
+    issue-timeout-ms: ${WALLET_ISSUE_TIMEOUT_MS:5000}

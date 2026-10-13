@@ -41,6 +41,10 @@ dependencies {
     // Avisos para el wallet-service (outbox -> Pub/Sub)
     implementation("com.google.cloud:google-cloud-pubsub")
     implementation("com.twelvemonkeys.imageio:imageio-webp:3.15.3")
+    // ID token de Google de la cuenta de runtime para llamar al wallet-service (IssuePass)
+    implementation("com.google.auth:google-auth-library-oauth2-http")
+    // Alta de tarjetas: teléfonos a E.164
+    implementation("com.googlecode.libphonenumber:libphonenumber:8.13.50")
 
     // Migraciones (Flyway usa JDBC; la aplicacion usa R2DBC)
     implementation("org.flywaydb:flyway-core")
