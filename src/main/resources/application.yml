@@ -45,3 +45,9 @@ app:
     refresh-token-ttl-days: ${REFRESH_TOKEN_TTL_DAYS:30}
     login-max-attempts: ${LOGIN_MAX_ATTEMPTS:5}
     login-window-minutes: ${LOGIN_WINDOW_MINUTES:15}
+  activation:
+    web-base-url: ${APP_WEB_BASE_URL:}
+    token-ttl-hours: ${ACTIVATION_TOKEN_TTL_HOURS:72}
+    max-attempts-per-ip: ${ACTIVATION_MAX_ATTEMPTS_PER_IP:5}
+    max-attempts-per-slug: ${ACTIVATION_MAX_ATTEMPTS_PER_SLUG:20}
+    window-minutes: ${ACTIVATION_WINDOW_MINUTES:15}

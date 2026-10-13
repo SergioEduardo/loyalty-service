@@ -5,6 +5,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.axioma.loyalty.adapter.in.web.GlobalExceptionHandler;
+import com.axioma.loyalty.application.handler.ActivateAccountHandler;
+import com.axioma.loyalty.application.handler.InspectActivationHandler;
 import com.axioma.loyalty.application.handler.LoginHandler;
 import com.axioma.loyalty.application.handler.LogoutHandler;
 import com.axioma.loyalty.application.handler.RefreshSessionHandler;
@@ -26,8 +28,10 @@ class AuthControllerTest {
     private final LoginHandler login = mock(LoginHandler.class);
     private final RefreshSessionHandler refresh = mock(RefreshSessionHandler.class);
     private final LogoutHandler logout = mock(LogoutHandler.class);
+    private final InspectActivationHandler inspect = mock(InspectActivationHandler.class);
+    private final ActivateAccountHandler activate = mock(ActivateAccountHandler.class);
     private final WebTestClient client = WebTestClient
-            .bindToController(new AuthController(login, refresh, logout))
+            .bindToController(new AuthController(login, refresh, logout, inspect, activate))
             .controllerAdvice(new GlobalExceptionHandler())
             .build();
 

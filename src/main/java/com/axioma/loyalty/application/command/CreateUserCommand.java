@@ -6,7 +6,8 @@ import java.util.UUID;
 
 /**
  * Alta de una cuenta del personal. El usuario se guarda recortado y en minúsculas; si no
- * llega nombre se usa el usuario. toString nunca incluye la contraseña.
+ * llega nombre se usa el usuario. Sin contraseña (null) la cuenta queda pendiente de activación.
+ * toString nunca incluye la contraseña.
  */
 public record CreateUserCommand(
         UUID tenantId,

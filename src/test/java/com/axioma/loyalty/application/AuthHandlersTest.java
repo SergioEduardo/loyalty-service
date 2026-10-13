@@ -24,6 +24,7 @@ import com.axioma.loyalty.application.handler.AuthenticateStaffHandler;
 import com.axioma.loyalty.application.handler.LoginHandler;
 import com.axioma.loyalty.application.handler.LogoutHandler;
 import com.axioma.loyalty.application.handler.RefreshSessionHandler;
+import com.axioma.loyalty.application.handler.SessionStarter;
 import com.axioma.loyalty.application.query.AuthenticateStaffQuery;
 import com.axioma.loyalty.application.validator.LoginValidator;
 import com.axioma.loyalty.config.AuthProperties;
@@ -74,7 +75,7 @@ class AuthHandlersTest {
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
 
     private final LoginHandler login = new LoginHandler(new LoginValidator(), tokenIssuer, tenants, users, hasher,
-            attempts, sessions, refreshTokens, properties, clock);
+            attempts, new SessionStarter(attempts, sessions, refreshTokens, tokenIssuer, properties, clock), properties);
     private final RefreshSessionHandler refresh =
             new RefreshSessionHandler(tokenIssuer, sessions, refreshTokens, properties, clock);
     private final LogoutHandler logout = new LogoutHandler(sessions, refreshTokens);

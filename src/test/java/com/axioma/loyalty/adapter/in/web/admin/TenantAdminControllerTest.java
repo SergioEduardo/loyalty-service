@@ -6,18 +6,24 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.axioma.loyalty.adapter.in.web.GlobalExceptionHandler;
+import com.axioma.loyalty.application.command.CreateUserCommand;
 import com.axioma.loyalty.application.command.DeactivateUserCommand;
+import com.axioma.loyalty.application.command.IssueActivationLinkCommand;
 import com.axioma.loyalty.application.command.ResetPasswordCommand;
 import com.axioma.loyalty.application.handler.CreateTenantHandler;
 import com.axioma.loyalty.application.handler.CreateUserHandler;
 import com.axioma.loyalty.application.handler.DeactivateUserHandler;
+import com.axioma.loyalty.application.handler.IssueActivationLinkHandler;
 import com.axioma.loyalty.application.handler.ResetPasswordHandler;
+import com.axioma.loyalty.domain.model.ActivationLink;
+import com.axioma.loyalty.domain.model.CreatedUser;
 import com.axioma.loyalty.domain.model.Slug;
 import com.axioma.loyalty.domain.model.Tenant;
 import com.axioma.loyalty.domain.model.UserAccount;
 import com.axioma.loyalty.domain.model.UserRole;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -34,8 +40,9 @@ class TenantAdminControllerTest {
     private final CreateUserHandler createUser = mock(CreateUserHandler.class);
     private final DeactivateUserHandler deactivate = mock(DeactivateUserHandler.class);
     private final ResetPasswordHandler reset = mock(ResetPasswordHandler.class);
+    private final IssueActivationLinkHandler issueLink = mock(IssueActivationLinkHandler.class);
     private final WebTestClient client = WebTestClient
-            .bindToController(new TenantAdminController(createTenant, createUser, deactivate, reset))
+            .bindToController(new TenantAdminController(createTenant, createUser, deactivate, reset, issueLink))
             .controllerAdvice(new GlobalExceptionHandler())
             .build();
 
@@ -69,8 +76,8 @@ class TenantAdminControllerTest {
 
     @Test
     void createsUserWithoutExposingTheHash() {
-        when(createUser.handle(any())).thenReturn(Mono.just(
-                new UserAccount(USER_ID, TENANT_ID, "Ana", "ana", "$2a$hash", UserRole.CASHIER, true)));
+        when(createUser.handle(any())).thenReturn(Mono.just(new CreatedUser(
+                new UserAccount(USER_ID, TENANT_ID, "Ana", "ana", "$2a$hash", UserRole.CASHIER, true), null)));
 
         client.post().uri("/api/admin/tenants/{t}/users", TENANT_ID)
                 .contentType(MediaType.APPLICATION_JSON)
@@ -81,7 +88,52 @@ class TenantAdminControllerTest {
                 .jsonPath("$.username").isEqualTo("ana")
                 .jsonPath("$.role").isEqualTo("CASHIER")
                 .jsonPath("$.credentialHash").doesNotExist()
-                .jsonPath("$.password").doesNotExist();
+                .jsonPath("$.password").doesNotExist()
+                .jsonPath("$.activation").doesNotExist();
+    }
+
+    @Test
+    void createsPendingUserWithActivationLink() {
+        var expiresAt = Instant.parse("2026-10-16T12:00:00Z");
+        when(createUser.handle(new CreateUserCommand(TENANT_ID, null, "ana", null, "OWNER")))
+                .thenReturn(Mono.just(new CreatedUser(
+                        new UserAccount(USER_ID, TENANT_ID, "ana", "ana", null, UserRole.OWNER, true),
+                        new ActivationLink("tok", expiresAt, "https://web/caja/mi-cafe/activar#t=tok"))));
+
+        client.post().uri("/api/admin/tenants/{t}/users", TENANT_ID)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("username", "ana", "role", "OWNER"))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody()
+                .jsonPath("$.active").isEqualTo(true)
+                .jsonPath("$.activation.token").isEqualTo("tok")
+                .jsonPath("$.activation.expiresAt").isEqualTo("2026-10-16T12:00:00Z")
+                .jsonPath("$.activation.activationUrl").isEqualTo("https://web/caja/mi-cafe/activar#t=tok");
+    }
+
+    @Test
+    void issuesActivationLinkWithoutUrlWhenNotConfigured() {
+        when(issueLink.handle(new IssueActivationLinkCommand(TENANT_ID, USER_ID))).thenReturn(Mono.just(
+                new ActivationLink("tok", Instant.parse("2026-10-16T12:00:00Z"), null)));
+
+        client.post().uri("/api/admin/tenants/{t}/users/{u}/activation-link", TENANT_ID, USER_ID)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.token").isEqualTo("tok")
+                .jsonPath("$.expiresAt").isEqualTo("2026-10-16T12:00:00Z")
+                .jsonPath("$.activationUrl").doesNotExist();
+    }
+
+    @Test
+    void activationLinkForInactiveUserIs409() {
+        when(issueLink.handle(any())).thenReturn(Mono.error(new LoyaltyException(ErrorCode.USER_INACTIVE)));
+
+        client.post().uri("/api/admin/tenants/{t}/users/{u}/activation-link", TENANT_ID, USER_ID)
+                .exchange()
+                .expectStatus().isEqualTo(409)
+                .expectBody().jsonPath("$.code").isEqualTo("USER_INACTIVE");
     }
 
     @Test

@@ -11,6 +11,7 @@ WITH rotated AS (
        AND s.revoked_at IS NULL
        AND s.expires_at > NOW()
        AND u.tenant_id = s.tenant_id AND u.id = s.user_id AND u.is_active
+       AND (u.credential_hash IS NOT NULL OR u.google_subject IS NOT NULL)
        AND t.id = s.tenant_id AND t.is_active
  RETURNING s.id AS session_id, s.tenant_id, s.user_id, u.name AS user_name, u.role,
            t.slug, t.business_name
