@@ -158,6 +158,11 @@ class TenantProfileFlowIT {
                 .jsonPath("$.name").isEqualTo("Café Nuevo")
                 .jsonPath("$.brandColor").isEqualTo("#a1b2c3");
         assertThat(outboxCount(tenantId)).isEqualTo(2);
+        // El aviso del cambio lleva el slug: el wallet-service forma con él el id de la clase de Google.
+        assertThat(latestTenantChanged(tenantId))
+                .containsEntry("slug", slug)
+                .containsEntry("name", "Café Nuevo")
+                .containsEntry("brand_color", "#a1b2c3");
     }
 
     @Test
@@ -382,5 +387,13 @@ class TenantProfileFlowIT {
     private long outboxCount(UUID tenantId) {
         return db.sql("SELECT count(*) FROM loyalty.outbox WHERE tenant_id = :t AND event_type = 'TenantChanged'")
                 .bind("t", tenantId).map(row -> row.get(0, Long.class)).one().block();
+    }
+
+    private Map<String, Object> latestTenantChanged(UUID tenantId) {
+        return db.sql("""
+                        SELECT payload->>'slug' AS slug, payload->>'name' AS name, payload->>'brandColor' AS brand_color
+                          FROM loyalty.outbox WHERE tenant_id = :t AND event_type = 'TenantChanged'
+                         ORDER BY id DESC LIMIT 1""")
+                .bind("t", tenantId).fetch().one().block();
     }
 }
