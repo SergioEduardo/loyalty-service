@@ -84,6 +84,10 @@ Publicación de avisos (outbox → Pub/Sub, diseño 12.11; `PublishPendingEvents
   `OUTBOX_PUBLISH_ALLOWED_EMAILS`; vacías → 403). La validación del token es `GoogleIdTokenVerifier`, compartida con
   `AdminTokenVerifier`. Todo endpoint nuevo bajo `/internal` queda detrás de ese filtro.
 - Pendiente: limpieza de avisos `PUBLISHED` antiguos y alerta sobre `FAILED`.
+- `TenantChanged` lleva el `slug` (el wallet-service forma con él la clase de Google); su contrato JSON lo fija
+  `TenantChangedTest`: no quitar ni renombrar campos. Pendiente (bloque de diseño de pases): republicar el
+  `TenantChanged` de los negocios existentes sin SQL manual, p. ej. `POST /internal/tenants/republish` que escriba un
+  aviso **nuevo** por negocio (seq mayor que el `last_seq` del wallet), sin el atajo de "nada cambió".
 
 Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6 y 12.7; `EnrollmentController`):
 - `POST /verification {slug, phone}` → `{verificationId, expiresAt}`; `POST /card {slug, phone, name, verificationId, code}`
