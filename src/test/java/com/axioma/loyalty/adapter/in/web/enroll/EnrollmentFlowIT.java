@@ -81,6 +81,7 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
     @BeforeEach
     void stubs() throws Exception {
         WALLET.mode(FakeWalletService.Mode.OK);
+        WALLET.google(FakeWalletService.Google.NULL);
         when(idTokens.idToken(anyString())).thenReturn(ID_TOKEN);
         when(sender.ensureReady()).thenReturn(Mono.empty());
         when(sender.send(any())).thenAnswer(invocation -> {
@@ -298,6 +299,58 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         assertThat(db.sql("SELECT verified_at IS NOT NULL FROM loyalty.phone_verifications WHERE id = :id")
                 .bind("id", UUID.fromString(id)).map(r -> r.get(0, Boolean.class)).one().block()).isTrue();
         assertThat(attempts(id)).isEqualTo(1);
+    }
+
+    @Test
+    void enrollPropagatesTheGoogleLink(CapturedOutput output) {
+        WALLET.google(FakeWalletService.Google.PRESENT);
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        String phone = freshNationalPhone();
+        String id = verificationId(slug, phone);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = enroll(slug, phone, "Ana", id, codes.get(id)).expectStatus().isOk()
+                .expectBody(Map.class).returnResult().getResponseBody();
+        assertThat(body).containsOnlyKeys("isNew", "apple", "google");
+        UUID cardId = db.sql("SELECT id FROM loyalty.cards WHERE tenant_id = :t").bind("t", tenantId)
+                .map(r -> r.get(0, UUID.class)).one().block();
+        @SuppressWarnings("unchecked")
+        var apple = (Map<String, Object>) body.get("apple");
+        assertThat(apple).containsOnlyKeys("url", "expiresAt");
+        assertThat(apple.get("url")).isEqualTo(FakeWalletService.linkFor(cardId.toString()));
+        assertThat(body.get("google")).isEqualTo(Map.of("url", FakeWalletService.googleLinkFor(cardId.toString())));
+        assertThat(output.getOut()).contains("Card enrolled tenantId=" + tenantId + " isNew=true google=true")
+                .doesNotContain("pay.google.com", "jwt-de-prueba");
+    }
+
+    @Test
+    void walletResponseWithoutGoogleFieldStillEnrolls() {
+        // Respuesta de un wallet-service anterior a Google Wallet: sin el campo google.
+        WALLET.google(FakeWalletService.Google.ABSENT);
+        String slug = newSlug();
+        createTenant(slug);
+        String phone = freshNationalPhone();
+        String id = verificationId(slug, phone);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = enroll(slug, phone, "Ana", id, codes.get(id)).expectStatus().isOk()
+                .expectBody(Map.class).returnResult().getResponseBody();
+        assertThat(body).containsOnlyKeys("isNew", "apple", "google");
+        assertThat(body.get("google")).isNull();
+        assertThat(body.get("apple")).isNotNull();
+    }
+
+    @Test
+    void malformedGoogleLinkNeverBreaksTheEnrollment() {
+        WALLET.google(FakeWalletService.Google.MALFORMED);
+        String slug = newSlug();
+        createTenant(slug);
+        String phone = freshNationalPhone();
+        String id = verificationId(slug, phone);
+
+        enroll(slug, phone, "Ana", id, codes.get(id)).expectStatus().isOk()
+                .expectBody().jsonPath("$.apple.url").exists().jsonPath("$.google").isEmpty();
     }
 
     @Test

@@ -37,6 +37,7 @@ class HttpWalletPassIssuerTest {
     @BeforeEach
     void reset() {
         WALLET.mode(FakeWalletService.Mode.OK);
+        WALLET.google(FakeWalletService.Google.NULL);
         WALLET.received().clear();
     }
 
@@ -47,7 +48,45 @@ class HttpWalletPassIssuerTest {
                 .verifyComplete();
         assertThat(WALLET.received()).hasSize(1);
         assertThat(output.getOut())
-                .containsPattern("INFO .*Wallet pass issued tenantId=" + CARD.tenantId() + " attempt=1 durationMs=\\d+");
+                .containsPattern("INFO .*Wallet pass issued tenantId=" + CARD.tenantId()
+                        + " attempt=1 google=false durationMs=\\d+");
+        assertNoPersonalData(output);
+    }
+
+    @Test
+    void googleLinkIsPropagatedWhenPresent(CapturedOutput output) {
+        WALLET.google(FakeWalletService.Google.PRESENT);
+        StepVerifier.create(issuer(WALLET.baseUrl(), 2000L).issue(CARD))
+                .assertNext(pass -> {
+                    assertThat(pass.appleUrl()).isEqualTo(FakeWalletService.linkFor(CARD.id().toString()));
+                    assertThat(pass.googleUrl()).isEqualTo(FakeWalletService.googleLinkFor(CARD.id().toString()));
+                    assertThat(pass.toString()).doesNotContain("pay.google.com", "wallet.test");
+                })
+                .verifyComplete();
+        assertThat(output.getOut()).containsPattern("INFO .*Wallet pass issued tenantId=" + CARD.tenantId()
+                + " attempt=1 google=true durationMs=\\d+");
+        assertNoPersonalData(output);
+    }
+
+    @Test
+    void googleNullAbsentOrMalformedStillIssuesTheApplePass(CapturedOutput output) {
+        for (var google : new FakeWalletService.Google[] {
+                FakeWalletService.Google.NULL, FakeWalletService.Google.ABSENT, FakeWalletService.Google.MALFORMED}) {
+            reset();
+            WALLET.google(google);
+            StepVerifier.create(issuer(WALLET.baseUrl(), 2000L).issue(CARD))
+                    .assertNext(pass -> {
+                        assertThat(pass.appleUrl()).as(google.name())
+                                .isEqualTo(FakeWalletService.linkFor(CARD.id().toString()));
+                        assertThat(pass.googleUrl()).as(google.name()).isNull();
+                        assertThat(pass.hasGoogle()).as(google.name()).isFalse();
+                    })
+                    .verifyComplete();
+            assertThat(WALLET.received()).as(google.name()).hasSize(1);
+        }
+        assertThat(output.getOut())
+                .contains("Wallet-service returned an unusable Google link; continuing without it tenantId=" + CARD.tenantId())
+                .doesNotContain("PASS_SERVICE_UNAVAILABLE");
         assertNoPersonalData(output);
     }
 
@@ -63,7 +102,8 @@ class HttpWalletPassIssuerTest {
         assertThat(output.getOut())
                 .containsPattern("WARN .*Wallet pass issue attempt failed tenantId=" + CARD.tenantId()
                         + " attempt=1/2 reason=timeout timeoutMs=500 durationMs=\\d+")
-                .containsPattern("INFO .*Wallet pass issued tenantId=" + CARD.tenantId() + " attempt=2 durationMs=\\d+");
+                .containsPattern("INFO .*Wallet pass issued tenantId=" + CARD.tenantId()
+                        + " attempt=2 google=false durationMs=\\d+");
         assertNoPersonalData(output);
     }
 
@@ -139,6 +179,7 @@ class HttpWalletPassIssuerTest {
     }
 
     private static void assertNoPersonalData(CapturedOutput output) {
-        assertThat(output.getOut()).doesNotContain(HOLDER, TOKEN, "wallet.test/passes", CARD.id().toString());
+        assertThat(output.getOut())
+                .doesNotContain(HOLDER, TOKEN, "wallet.test/passes", "pay.google.com", "jwt-de-prueba", CARD.id().toString());
     }
 }

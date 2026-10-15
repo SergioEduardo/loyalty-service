@@ -53,7 +53,8 @@ public class EnrollCardHandler implements Handler<EnrollCardCommand, Mono<CardEn
                             : card;
                     return walletPassIssuer.issue(forPass)
                             .map(pass -> {
-                                log.info("Card enrolled tenantId={} isNew={}", tenant.id(), enrolled.isNew());
+                                log.info("Card enrolled tenantId={} isNew={} google={}", tenant.id(), enrolled.isNew(),
+                                        pass.hasGoogle());
                                 return new CardEnrollment(enrolled.isNew(), pass);
                             });
                 });

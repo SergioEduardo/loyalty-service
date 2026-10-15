@@ -23,6 +23,12 @@ public final class FakeWalletService implements AutoCloseable {
     /** SLOW_ONCE: la primera petición tarda slowMillis (como un arranque en frío) y las demás responden al momento. */
     public enum Mode { OK, SLOW, SLOW_ONCE, DOWN, TEMPLATE_NOT_READY, UNAUTHORIZED }
 
+    /**
+     * Campo google de la respuesta 200: NULL (Google apagado o falló), PRESENT ({url}), ABSENT (respuesta
+     * anterior a Google Wallet, sin el campo) o MALFORMED (forma inesperada).
+     */
+    public enum Google { NULL, PRESENT, ABSENT, MALFORMED }
+
     public record Received(String authorization, String body) {
     }
 
@@ -31,6 +37,7 @@ public final class FakeWalletService implements AutoCloseable {
     private final HttpServer server;
     private final List<Received> received = new CopyOnWriteArrayList<>();
     private volatile Mode mode = Mode.OK;
+    private volatile Google google = Google.NULL;
     private volatile long slowMillis = 3000;
     private final AtomicBoolean slowPending = new AtomicBoolean();
 
@@ -99,6 +106,10 @@ public final class FakeWalletService implements AutoCloseable {
         this.mode = mode;
     }
 
+    public void google(Google google) {
+        this.google = google;
+    }
+
     public void slowMillis(long millis) {
         this.slowMillis = millis;
     }
@@ -111,12 +122,22 @@ public final class FakeWalletService implements AutoCloseable {
         return "https://wallet.test/passes/" + cardId + ".pkpass?exp=1&sig=firma";
     }
 
-    private static String ok(String body) {
+    public static String googleLinkFor(String cardId) {
+        return "https://pay.google.com/gp/v/save/jwt-de-prueba." + cardId + ".firma";
+    }
+
+    private String ok(String body) {
         Matcher m = CARD_ID.matcher(body);
         String cardId = m.find() ? m.group(1) : "desconocida";
         String expires = Instant.now().plus(10, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.SECONDS).toString();
-        return "{\"cardId\":\"" + cardId + "\",\"isNew\":true,\"apple\":{\"url\":\"" + linkFor(cardId)
-                + "\",\"expiresAt\":\"" + expires + "\"},\"google\":null}";
+        String apple = "{\"cardId\":\"" + cardId + "\",\"isNew\":true,\"apple\":{\"url\":\"" + linkFor(cardId)
+                + "\",\"expiresAt\":\"" + expires + "\"}";
+        return apple + switch (google) {
+            case NULL -> ",\"google\":null}";
+            case PRESENT -> ",\"google\":{\"url\":\"" + googleLinkFor(cardId) + "\"}}";
+            case ABSENT -> "}";
+            case MALFORMED -> ",\"google\":{\"url\":42}}";
+        };
     }
 
     private static void sleep(long millis) {

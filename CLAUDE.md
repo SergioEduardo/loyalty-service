@@ -87,7 +87,7 @@ Publicación de avisos (outbox → Pub/Sub, diseño 12.11; `PublishPendingEvents
 
 Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6 y 12.7; `EnrollmentController`):
 - `POST /verification {slug, phone}` → `{verificationId, expiresAt}`; `POST /card {slug, phone, name, verificationId, code}`
-  → `{isNew, apple: {url, expiresAt}, google: null}`. Nunca exponer cardId (salvo dentro del enlace del wallet), nombre ni
+  → `{isNew, apple: {url, expiresAt}, google: {url} | null}`. Nunca exponer cardId (salvo dentro del enlace del wallet), nombre ni
   teléfono. El slug va en el cuerpo, no en la ruta (RequestLogFilter registra la ruta). Identidad del negocio para la
   página de alta: el `GET /api/public/tenants/{slug}/identity` existente.
 - Teléfono: `PhoneRules` (libphonenumber, región MX, acepta `+52 1`). Negocio: `ActiveTenantGuard.requireBySlug`.
@@ -107,10 +107,13 @@ Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6
   un reintento solo por timeout/`WebClientRequestException`, nunca ante una respuesta HTTP: IssuePass es idempotente
   por cardId; logs con `attempt` y `durationMs`). 409 TEMPLATE_NOT_READY → 409;
   lo demás → 503 `PASS_SERVICE_UNAVAILABLE` (401/403 con log ERROR sin detalles). Sin URL: `DisabledWalletPassIssuer`.
+- Google Wallet es opcional: `google` ausente (wallet-service anterior), null, `{url: null}` o malformado →
+  `IssuedPass.googleUrl` null y `google: null` en la respuesta; nunca falla el alta ni da `PASS_SERVICE_UNAVAILABLE`
+  (solo Apple decide el éxito). El enlace de Google lleva un JWT firmado: nunca registrarlo (logs solo `google=true|false`).
 - `PhoneVerificationSenderPort` por `VERIFICATION_SENDER` (`EnrollConfig`): `disabled` (defecto, 503), `log` (código en
   log INFO; **solo `APP_ENV=dev`, si no la app no arranca**), `whatsapp` (pendiente, 503). Fallo de envío → la
   verificación se queda contando y 503 `VERIFICATION_UNAVAILABLE`.
 - Privacidad: nunca registrar teléfono, nombre, código (fuera de `log`), hash, IP ni verificationId junto al teléfono;
   solo tenantId, resultados y conteos. Commands/requests/modelos con esos datos sobrescriben `toString`.
 - Pendiente: adaptador real de WhatsApp (plantilla de Meta), limpieza periódica de verificaciones vencidas y de
-  contadores de límite, Google Wallet (`google` en null).
+  contadores de límite.
