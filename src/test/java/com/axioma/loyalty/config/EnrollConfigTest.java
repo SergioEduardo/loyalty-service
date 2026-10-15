@@ -81,7 +81,7 @@ class EnrollConfigTest {
                     var properties = context.getBean(WalletProperties.class);
                     assertThat(properties.serviceUrl()).isEqualTo("https://wallet.test");
                     assertThat(properties.audience()).isEqualTo("https://wallet.test");
-                    assertThat(properties.issueTimeoutMs()).isEqualTo(5000L);
+                    assertThat(properties.issueTimeoutMs()).isEqualTo(20000L);
                 });
     }
 

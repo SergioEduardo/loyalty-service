@@ -73,4 +73,4 @@ app:
   wallet:
     service-url: ${WALLET_SERVICE_URL:}
     audience: ${WALLET_SERVICE_AUDIENCE:}
-    issue-timeout-ms: ${WALLET_ISSUE_TIMEOUT_MS:5000}
+    issue-timeout-ms: ${WALLET_ISSUE_TIMEOUT_MS:20000}

@@ -444,6 +444,21 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
     }
 
     @Test
+    void coldWalletIsRecoveredByTheAutomaticRetry() {
+        WALLET.mode(FakeWalletService.Mode.SLOW_ONCE);
+        WALLET.slowMillis(2000);
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        String phone = freshNationalPhone();
+        String id = verificationId(slug, phone);
+        int before = WALLET.received().size();
+        enroll(slug, phone, "Ana", id, codes.get(id)).expectStatus().isOk()
+                .expectBody().jsonPath("$.isNew").isEqualTo(true).jsonPath("$.apple.url").exists();
+        assertThat(WALLET.received().size() - before).isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM loyalty.cards WHERE tenant_id = :t", tenantId)).isEqualTo(1);
+    }
+
+    @Test
     void walletDownThenRetrySucceedsWithTheSameVerification() {
         WALLET.mode(FakeWalletService.Mode.DOWN);
         String slug = newSlug();

@@ -6,6 +6,7 @@ import com.axioma.loyalty.domain.model.IssuedPass;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
 import com.axioma.loyalty.domain.port.out.WalletPassIssuerPort;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
@@ -16,20 +17,25 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
  * POST {WALLET_SERVICE_URL}/internal/passes con un ID token de Google de la cuenta de runtime
- * (audiencia WALLET_SERVICE_AUDIENCE). Todo, incluido obtener el token, dentro de
- * WALLET_ISSUE_TIMEOUT_MS. 409 TEMPLATE_NOT_READY -> TEMPLATE_NOT_READY; cualquier otro fallo ->
- * PASS_SERVICE_UNAVAILABLE. Los logs nunca llevan el token, el nombre ni el enlace del pase.
+ * (audiencia WALLET_SERVICE_AUDIENCE). Obtener el token y cada intento tienen como tope
+ * WALLET_ISSUE_TIMEOUT_MS. Un solo reintento, y solo si el intento se agotó o falló la conexión: el
+ * wallet-service emite idempotente por cardId, así que repetir no duplica el pase. Una respuesta HTTP
+ * (2xx malformado, 4xx o 5xx) nunca se reintenta. 409 TEMPLATE_NOT_READY -> TEMPLATE_NOT_READY;
+ * cualquier otro fallo -> PASS_SERVICE_UNAVAILABLE. Los logs llevan tenantId, intento y duración;
+ * nunca el token, el nombre ni el enlace del pase.
  */
 @Slf4j
 @RequiredArgsConstructor
 public class HttpWalletPassIssuer implements WalletPassIssuerPort {
 
     static final String PATH = "/internal/passes";
+    static final int MAX_ATTEMPTS = 2;
 
     private final WebClient webClient;
     private final ServiceIdTokenSource idTokens;
@@ -55,24 +61,56 @@ public class HttpWalletPassIssuer implements WalletPassIssuerPort {
     @Override
     public Mono<IssuedPass> issue(Card card) {
         var request = new IssueRequest(card.id(), card.tenantId(), card.holderName(), card.points());
+        return Mono.defer(() -> {
+            long start = System.nanoTime();
+            return idToken()
+                    .flatMap(token -> attempt(token, request, 1, start)
+                            .onErrorResume(HttpWalletPassIssuer::retryable, e -> attempt(token, request, 2, start)))
+                    .onErrorMap(e -> !(e instanceof LoyaltyException), e -> {
+                        log.warn("Wallet pass issue failed tenantId={} reason={} durationMs={}",
+                                request.tenantId(), reason(e), elapsedMs(start));
+                        return unavailable();
+                    });
+        });
+    }
+
+    private Mono<String> idToken() {
         return Mono.fromCallable(() -> idTokens.idToken(properties.audience()))
                 .subscribeOn(Schedulers.boundedElastic())
-                .onErrorMap(e -> !(e instanceof LoyaltyException), e -> {
-                    log.error("Could not obtain an ID token for wallet-service ({})", e.getClass().getSimpleName());
-                    return unavailable();
-                })
-                .flatMap(token -> webClient.post()
-                        .uri(PATH)
-                        .headers(headers -> headers.setBearerAuth(token))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .bodyValue(request)
-                        .exchangeToMono(response -> handle(response, card.tenantId())))
                 .timeout(properties.issueTimeout())
                 .onErrorMap(e -> !(e instanceof LoyaltyException), e -> {
-                    log.warn("Wallet pass issue failed tenantId={} reason={}", card.tenantId(),
-                            e instanceof TimeoutException ? "timeout" : e.getClass().getSimpleName());
+                    log.error("Could not obtain an ID token for wallet-service ({})", reason(e));
                     return unavailable();
                 });
+    }
+
+    private Mono<IssuedPass> attempt(String token, IssueRequest request, int attempt, long start) {
+        return webClient.post()
+                .uri(PATH)
+                .headers(headers -> headers.setBearerAuth(token))
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .exchangeToMono(response -> handle(response, request.tenantId()))
+                .timeout(properties.issueTimeout())
+                .doOnNext(pass -> log.info("Wallet pass issued tenantId={} attempt={} durationMs={}",
+                        request.tenantId(), attempt, elapsedMs(start)))
+                .doOnError(HttpWalletPassIssuer::retryable, e -> log.warn(
+                        "Wallet pass issue attempt failed tenantId={} attempt={}/{} reason={} timeoutMs={} durationMs={}",
+                        request.tenantId(), attempt, MAX_ATTEMPTS, reason(e), properties.issueTimeoutMs(),
+                        elapsedMs(start)));
+    }
+
+    /** Se agotó el intento o no hubo respuesta HTTP (conexión rechazada, cortada, DNS). */
+    static boolean retryable(Throwable e) {
+        return e instanceof TimeoutException || e instanceof WebClientRequestException;
+    }
+
+    private static String reason(Throwable e) {
+        return e instanceof TimeoutException ? "timeout" : e.getClass().getSimpleName();
+    }
+
+    private static long elapsedMs(long start) {
+        return Duration.ofNanos(System.nanoTime() - start).toMillis();
     }
 
     private Mono<IssuedPass> handle(ClientResponse response, UUID tenantId) {
