@@ -10,6 +10,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -19,7 +20,8 @@ import java.util.regex.Pattern;
  */
 public final class FakeWalletService implements AutoCloseable {
 
-    public enum Mode { OK, SLOW, DOWN, TEMPLATE_NOT_READY, UNAUTHORIZED }
+    /** SLOW_ONCE: la primera petición tarda slowMillis (como un arranque en frío) y las demás responden al momento. */
+    public enum Mode { OK, SLOW, SLOW_ONCE, DOWN, TEMPLATE_NOT_READY, UNAUTHORIZED }
 
     public record Received(String authorization, String body) {
     }
@@ -30,6 +32,7 @@ public final class FakeWalletService implements AutoCloseable {
     private final List<Received> received = new CopyOnWriteArrayList<>();
     private volatile Mode mode = Mode.OK;
     private volatile long slowMillis = 3000;
+    private final AtomicBoolean slowPending = new AtomicBoolean();
 
     public FakeWalletService() {
         try {
@@ -46,6 +49,13 @@ public final class FakeWalletService implements AutoCloseable {
             switch (mode) {
                 case SLOW -> {
                     sleep(slowMillis);
+                    status = 200;
+                    response = ok(body);
+                }
+                case SLOW_ONCE -> {
+                    if (slowPending.compareAndSet(true, false)) {
+                        sleep(slowMillis);
+                    }
                     status = 200;
                     response = ok(body);
                 }
@@ -85,6 +95,7 @@ public final class FakeWalletService implements AutoCloseable {
     }
 
     public void mode(Mode mode) {
+        slowPending.set(mode == Mode.SLOW_ONCE);
         this.mode = mode;
     }
 

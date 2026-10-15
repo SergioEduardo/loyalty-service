@@ -173,7 +173,9 @@ Dar la tarjeta:
   se lee y conserva su nombre. `isNew` = si se insertó en esta llamada. Commit antes de llamar al wallet-service.
 - `POST {WALLET_SERVICE_URL}/internal/passes` con `{cardId, tenantId, holderName, points}` y un ID token de
   Google de la cuenta de runtime (`sa-loyalty-service`, por el servidor de metadatos) con audiencia
-  `WALLET_SERVICE_AUDIENCE`. Máximo `WALLET_ISSUE_TIMEOUT_MS` (token incluido). 409 `TEMPLATE_NOT_READY` → 409
+  `WALLET_SERVICE_AUDIENCE`. Tope `WALLET_ISSUE_TIMEOUT_MS` (20 s) para el token y para cada intento; un solo
+  reintento si el intento se agota o falla la conexión (IssuePass es idempotente por `cardId`), nunca ante una
+  respuesta HTTP. Log INFO con `attempt` y `durationMs`; WARN por intento agotado y por fallo final. 409 `TEMPLATE_NOT_READY` → 409
   `TEMPLATE_NOT_READY`; tiempo agotado, red o 5xx → 503 `PASS_SERVICE_UNAVAILABLE`; 401/403 → 503
   `PASS_SERVICE_UNAVAILABLE` y log ERROR "Authentication to wallet-service was rejected". Sin
   `WALLET_SERVICE_URL`: 503 `PASS_SERVICE_UNAVAILABLE` (la tarjeta sí se crea).
@@ -344,7 +346,7 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `ENROLL_MAX_ATTEMPTS` | Intentos por código (1–20) | 5 |
 | `WALLET_SERVICE_URL` | Base del wallet-service. Dev: `https://wallet-service-g42hkr2xmq-uk.a.run.app`. Sin ella el alta responde 503 `PASS_SERVICE_UNAVAILABLE` | vacía |
 | `WALLET_SERVICE_AUDIENCE` | Audiencia del ID token hacia el wallet-service (su `WALLET_EVENTS_AUDIENCE`). Dev: `https://wallet-service-g42hkr2xmq-uk.a.run.app` | `WALLET_SERVICE_URL` |
-| `WALLET_ISSUE_TIMEOUT_MS` | Tiempo máximo de IssuePass, incluido obtener el token | 5000 |
+| `WALLET_ISSUE_TIMEOUT_MS` | Tope de obtener el token y de cada intento de IssuePass (un reintento solo por tiempo agotado o conexión fallida). Cubre un arranque en frío | 20000 |
 
 Cloud Storage, Pub/Sub y el ID token hacia el wallet-service usan Application Default Credentials (en Cloud Run, la cuenta de servicio del servicio; sin llaves).
 En local no hace falta para Storage (el cliente se crea al primer uso); con `PUBSUB_TOPIC` definido, el publisher

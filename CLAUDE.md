@@ -103,7 +103,9 @@ Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6
 - `CardEnrollmentWriter`: INSERT ON CONFLICT DO NOTHING y, si no insertó, SELECT (otra sentencia) en una transacción
   corta; commit antes del wallet-service. Nunca llamar al wallet-service dentro de una transacción.
 - `WalletPassIssuerPort` → `HttpWalletPassIssuer` (`WALLET_SERVICE_URL`/internal/passes, ID token de ADC con
-  `WALLET_SERVICE_AUDIENCE` vía `ServiceIdTokenSource`, tope `WALLET_ISSUE_TIMEOUT_MS`). 409 TEMPLATE_NOT_READY → 409;
+  `WALLET_SERVICE_AUDIENCE` vía `ServiceIdTokenSource`, tope `WALLET_ISSUE_TIMEOUT_MS` (20 s) por intento y para el token;
+  un reintento solo por timeout/`WebClientRequestException`, nunca ante una respuesta HTTP: IssuePass es idempotente
+  por cardId; logs con `attempt` y `durationMs`). 409 TEMPLATE_NOT_READY → 409;
   lo demás → 503 `PASS_SERVICE_UNAVAILABLE` (401/403 con log ERROR sin detalles). Sin URL: `DisabledWalletPassIssuer`.
 - `PhoneVerificationSenderPort` por `VERIFICATION_SENDER` (`EnrollConfig`): `disabled` (defecto, 503), `log` (código en
   log INFO; **solo `APP_ENV=dev`, si no la app no arranca**), `whatsapp` (pendiente, 503). Fallo de envío → la
