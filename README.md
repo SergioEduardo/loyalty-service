@@ -46,7 +46,9 @@ Cuerpos (JSON):
 // POST /api/admin/tenants  (cooldownSeconds default 0, undoWindowSeconds default 300)
 { "slug": "mi-cafe", "name": "Mi Café", "description": "Bienvenido", "brandColor": "#112233",
   "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 }
-// POST .../users  (username se guarda recortado y en minúsculas; name opcional, default = username;
+// POST .../users  (username: 3–60 caracteres a-z 0-9 . _ @ + -, sin espacios ni acentos, empieza y termina en
+//                 letra o número; se guarda recortado y en minúsculas. name opcional ≤ 80, default = username;
+//                 role CASHIER u OWNER. Un INVALID_USER queda en WARN con field y reason, sin el valor;
 //                 password opcional: sin ella la cuenta queda pendiente de activación)
 { "username": "ana", "password": "al-menos-8", "role": "CASHIER", "name": "Ana" }
 // Respuesta 201 (activation solo si no llegó password)
