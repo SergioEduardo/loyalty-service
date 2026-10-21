@@ -8,9 +8,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Alta de tarjetas (12.6 y 12.7). Límites por hora: códigos por (negocio, teléfono), solicitudes de
  * código por IP y por negocio, y altas por IP. otpHashSalt (OTP_HASH_SALT, Secret Manager
  * otp-hmac-salt) es la llave del HMAC del código; sin ella, o con menos de 32 bytes, pedir un código o
- * la tarjeta responde VERIFICATION_UNAVAILABLE. verificationSender: disabled | log | whatsapp; "log"
- * solo con appEnv = dev. Los números vacíos (una variable de GitHub sin definir llega como "") toman su
- * default. toString nunca incluye la sal.
+ * la tarjeta responde VERIFICATION_UNAVAILABLE. verificationSender: disabled | log | whatsapp | sms (canal
+ * por defecto); "log" solo con appEnv = dev. verificationEnabledChannels: lista separada por comas de
+ * canales disponibles (whatsapp, sms); EnrollConfig la valida. Los números vacíos (una variable de GitHub
+ * sin definir llega como "") toman su default. toString nunca incluye la sal.
  */
 @ConfigurationProperties(prefix = "app.enroll")
 public record EnrollProperties(
@@ -22,6 +23,7 @@ public record EnrollProperties(
         Integer maxAttempts,
         String otpHashSalt,
         String verificationSender,
+        String verificationEnabledChannels,
         String appEnv) {
 
     public static final int MIN_SALT_BYTES = 32;
@@ -37,6 +39,8 @@ public record EnrollProperties(
         otpHashSalt = otpHashSalt == null || otpHashSalt.isBlank() ? null : otpHashSalt;
         verificationSender = verificationSender == null || verificationSender.isBlank()
                 ? "disabled" : verificationSender.strip().toLowerCase(Locale.ROOT);
+        verificationEnabledChannels = verificationEnabledChannels == null
+                ? "" : verificationEnabledChannels.strip().toLowerCase(Locale.ROOT);
         appEnv = appEnv == null ? "" : appEnv.strip().toLowerCase(Locale.ROOT);
 
         if (phoneLimitPerHour < 1 || ipLimitPerHour < 1 || tenantLimitPerHour < 1 || cardIpLimitPerHour < 1) {
@@ -65,6 +69,7 @@ public record EnrollProperties(
                 + ", tenantLimitPerHour=" + tenantLimitPerHour + ", cardIpLimitPerHour=" + cardIpLimitPerHour
                 + ", codeTtlMinutes=" + codeTtlMinutes + ", maxAttempts=" + maxAttempts
                 + ", otpHashSalt=" + (otpHashSalt == null ? "<vacía>" : "***")
-                + ", verificationSender=" + verificationSender + ", appEnv=" + appEnv + "]";
+                + ", verificationSender=" + verificationSender
+                + ", verificationEnabledChannels=" + verificationEnabledChannels + ", appEnv=" + appEnv + "]";
     }
 }

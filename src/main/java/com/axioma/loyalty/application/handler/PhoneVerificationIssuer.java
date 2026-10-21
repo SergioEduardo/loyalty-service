@@ -3,6 +3,7 @@ package com.axioma.loyalty.application.handler;
 import com.axioma.loyalty.config.EnrollProperties;
 import com.axioma.loyalty.domain.model.IssuedVerification;
 import com.axioma.loyalty.domain.model.PhoneE164;
+import com.axioma.loyalty.domain.model.VerificationChannel;
 import com.axioma.loyalty.domain.model.error.RateLimitedException;
 import com.axioma.loyalty.domain.port.out.PhoneVerificationRepository;
 import java.util.UUID;
@@ -15,7 +16,8 @@ import reactor.core.publisher.Mono;
 /**
  * Crea la verificación si el teléfono no llegó a su límite en la última hora (contado con
  * phone_verifications.created_at). Una transacción con un bloqueo por (negocio, teléfono): dos
- * solicitudes simultáneas no pueden pasar las dos con el último lugar.
+ * solicitudes simultáneas no pueden pasar las dos con el último lugar. El conteo no mira el canal: pedir
+ * por WhatsApp y luego por SMS gasta dos lugares del mismo límite.
  */
 @Slf4j
 @Component
@@ -26,7 +28,8 @@ public class PhoneVerificationIssuer {
     private final EnrollProperties properties;
 
     @Transactional
-    public Mono<IssuedVerification> issue(UUID tenantId, PhoneE164 phone, String codeHash) {
+    public Mono<IssuedVerification> issue(UUID tenantId, PhoneE164 phone, String codeHash,
+                                          VerificationChannel channel) {
         return verifications.lockPhone(tenantId, phone)
                 .then(Mono.defer(() -> verifications.countRecent(tenantId, phone, EnrollProperties.WINDOW_MINUTES)))
                 .flatMap(recent -> {
@@ -34,7 +37,7 @@ public class PhoneVerificationIssuer {
                         log.info("Enrollment rate limited scope=phone tenantId={}", tenantId);
                         return Mono.error(new RateLimitedException(recent.retryAfterSeconds()));
                     }
-                    return verifications.create(tenantId, phone, codeHash, properties.codeTtlMinutes());
+                    return verifications.create(tenantId, phone, codeHash, channel, properties.codeTtlMinutes());
                 });
     }
 }

@@ -31,6 +31,8 @@ public enum ErrorCode {
     CODE_EXPIRED("El código venció. Pide uno nuevo."),
     RATE_LIMITED("Demasiados intentos. Espera unos minutos."),
     VERIFICATION_UNAVAILABLE("No pudimos enviar el código. Intenta de nuevo."),
+    CHANNEL_NOT_AVAILABLE("Ese medio de envío no está disponible."),
+    RECIPIENT_UNREACHABLE("No pudimos enviar el código a ese número por este medio. Prueba con otro."),
     TEMPLATE_NOT_READY("Estamos preparando la tarjeta. Intenta en un momento."),
     PASS_SERVICE_UNAVAILABLE("No pudimos crear tu tarjeta. Intenta de nuevo."),
     INVALID_REQUEST("La solicitud no es válida."),

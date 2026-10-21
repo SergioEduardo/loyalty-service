@@ -4,6 +4,7 @@ import com.axioma.loyalty.domain.model.IssuedVerification;
 import com.axioma.loyalty.domain.model.PhoneE164;
 import com.axioma.loyalty.domain.model.PhoneVerificationState;
 import com.axioma.loyalty.domain.model.RecentRequests;
+import com.axioma.loyalty.domain.model.VerificationChannel;
 import com.axioma.loyalty.domain.model.VerificationAttempt;
 import java.util.UUID;
 import reactor.core.publisher.Mono;
@@ -16,7 +17,9 @@ public interface PhoneVerificationRepository {
 
     Mono<RecentRequests> countRecent(UUID tenantId, PhoneE164 phone, int windowMinutes);
 
-    Mono<IssuedVerification> create(UUID tenantId, PhoneE164 phone, String codeHash, int ttlMinutes);
+    /** channel queda para auditoría; ningún límite depende de él. */
+    Mono<IssuedVerification> create(UUID tenantId, PhoneE164 phone, String codeHash, VerificationChannel channel,
+                                    int ttlMinutes);
 
     /** Vacío si no hay una verificación con ese id para ese negocio y teléfono. */
     Mono<PhoneVerificationState> find(UUID verificationId, UUID tenantId, PhoneE164 phone);

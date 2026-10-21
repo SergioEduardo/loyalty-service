@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.axioma.loyalty.adapter.out.wallet.ServiceIdTokenSource;
 import com.axioma.loyalty.support.FakeWalletService;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -22,8 +23,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * VERIFICATION_SENDER=log con APP_ENV=dev: el código sale en un log INFO (y sirve para dar la tarjeta),
- * pero ni el teléfono, ni el nombre, ni el hash, ni la IP. Se omite sin Docker.
+ * VERIFICATION_SENDER=log con APP_ENV=dev y solo sms habilitado: el log reemplaza al canal y el código
+ * sale en un log INFO con el canal (y sirve para dar la tarjeta), pero ni el teléfono, ni el nombre, ni el
+ * hash, ni la IP. Un canal no habilitado responde CHANNEL_NOT_AVAILABLE. Se omite sin Docker.
  */
 @Testcontainers(disabledWithoutDocker = true)
 @ExtendWith(OutputCaptureExtension.class)
@@ -32,6 +34,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         properties = {
                 "app.enroll.otp-hash-salt=" + EnrollmentItSupport.SALT,
                 "app.enroll.verification-sender=log",
+                "app.enroll.verification-enabled-channels=sms",
                 "app.enroll.app-env=dev"
         })
 class EnrollmentLogSenderIT extends EnrollmentItSupport {
@@ -65,9 +68,11 @@ class EnrollmentLogSenderIT extends EnrollmentItSupport {
         Map<String, Object> body = requestCode(slug, phone, ip).expectStatus().isOk()
                 .expectBody(Map.class).returnResult().getResponseBody();
         String id = (String) body.get("verificationId");
+        assertThat(body.get("channel")).isEqualTo("sms");
+        assertThat(body.get("availableChannels")).isEqualTo(List.of("sms"));
 
         Matcher m = Pattern.compile("INFO .*Verification code \\(VERIFICATION_SENDER=log\\) tenantId=" + tenantId
-                + " verificationId=" + id + " code=([0-9]{6})").matcher(output.getAll());
+                + " verificationId=" + id + " channel=sms code=([0-9]{6})").matcher(output.getAll());
         assertThat(m.find()).isTrue();
         String code = m.group(1);
 
@@ -80,5 +85,17 @@ class EnrollmentLogSenderIT extends EnrollmentItSupport {
         Pattern codePattern = Pattern.compile("(?<![0-9A-Fa-f])" + code + "(?![0-9A-Fa-f])");
         assertThat(logs.lines().filter(line -> codePattern.matcher(line).find()))
                 .singleElement().asString().contains("VERIFICATION_SENDER=log");
+    }
+
+    @Test
+    void channelThatIsNotEnabledIs400(CapturedOutput output) {
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        requestCode(slug, freshNationalPhone(), freshIp(), "whatsapp").expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("CHANNEL_NOT_AVAILABLE")
+                .jsonPath("$.message").isEqualTo("Ese medio de envío no está disponible.");
+        assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isZero();
+        assertThat(output.getAll()).doesNotContain("Verification code (VERIFICATION_SENDER=log) tenantId=" + tenantId);
     }
 }

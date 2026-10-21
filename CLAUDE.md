@@ -114,10 +114,21 @@ Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6
 - Google Wallet es opcional: `google` ausente (wallet-service anterior), null, `{url: null}` o malformado →
   `IssuedPass.googleUrl` null y `google: null` en la respuesta; nunca falla el alta ni da `PASS_SERVICE_UNAVAILABLE`
   (solo Apple decide el éxito). El enlace de Google lleva un JWT firmado: nunca registrarlo (logs solo `google=true|false`).
-- `PhoneVerificationSenderPort` por `VERIFICATION_SENDER` (`EnrollConfig`): `disabled` (defecto, 503), `log` (código en
-  log INFO; **solo `APP_ENV=dev`, si no la app no arranca**), `whatsapp` (pendiente, 503). Fallo de envío → la
-  verificación se queda contando y 503 `VERIFICATION_UNAVAILABLE`.
-- Privacidad: nunca registrar teléfono, nombre, código (fuera de `log`), hash, IP ni verificationId junto al teléfono;
-  solo tenantId, resultados y conteos. Commands/requests/modelos con esos datos sobrescriben `toString`.
-- Pendiente: adaptador real de WhatsApp (plantilla de Meta), limpieza periódica de verificaciones vencidas y de
-  contadores de límite.
+- Envío del código: un puerto (`PhoneVerificationSenderPort`) y `VerificationChannelPolicy` (`EnrollConfig`).
+  `VERIFICATION_SENDER` = canal por defecto: `disabled` (defecto, 503), `log` (reemplaza a todos los canales y escribe
+  `channel` y código en log INFO; **solo `APP_ENV=dev`, si no la app no arranca**), `whatsapp` o `sms`;
+  `VERIFICATION_ENABLED_CHANNELS` = canales disponibles. Canal desconocido, por defecto fuera de la lista o canal
+  habilitado sin credenciales → la app no arranca. `channel` en la solicitud es opcional; desconocido/no habilitado
+  → 400 `CHANNEL_NOT_AVAILABLE` antes de contar límites. Respuesta aditiva `channel` + `availableChannels`.
+- Los límites (teléfono, IP, negocio), la vigencia y los intentos no dependen del canal; `phone_verifications.channel`
+  (V6) es solo auditoría. Fallo de envío → la verificación se queda contando; `VerificationDeliveryException`:
+  400 `RECIPIENT_UNREACHABLE` (Meta 131026, Twilio 21211) o 503 `VERIFICATION_UNAVAILABLE`, sin detalles del proveedor.
+- `WhatsAppPhoneVerificationSender` (Cloud API, plantilla de autenticación: código en body y botón `url` index 0):
+  un reintento **solo** si no hubo conexión. `TwilioSmsPhoneVerificationSender` (Programmable Messaging, nunca
+  Twilio Verify): sin reintentos; texto ASCII GSM-7 de un segmento (`SmsVerificationText`). 2xx/201 = aceptado,
+  no entregado. Tokens (`WHATSAPP_ACCESS_TOKEN`, `TWILIO_AUTH_TOKEN`) de Secret Manager, cableados en loyalty-infra.
+- Privacidad: nunca registrar teléfono (ni enmascarado), nombre, código (fuera de `log`), hash, IP, texto del SMS,
+  tokens de proveedores ni verificationId junto al teléfono; para correlacionar: tenantId, verificationId, channel,
+  estado HTTP y `providerCode`. Commands/requests/payloads/propiedades con esos datos sobrescriben `toString`.
+- Pendiente: seguimiento de entrega (webhooks de Meta, `StatusCallback` de Twilio), limpieza periódica de
+  verificaciones vencidas y de contadores de límite.
