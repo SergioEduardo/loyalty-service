@@ -27,7 +27,8 @@ import reactor.core.publisher.Mono;
  * teléfono + alta de la verificación (solo el hash del código) y envío. Los límites, el vencimiento y
  * los intentos no dependen del canal. Nunca consulta tarjetas: la respuesta y el tiempo no dependen de
  * si el teléfono ya tiene una. Si el envío falla, la verificación se queda (cuenta para el límite) y
- * responde RECIPIENT_UNREACHABLE (el número no recibe por ese canal) o VERIFICATION_UNAVAILABLE.
+ * responde RECIPIENT_UNREACHABLE (el número no recibe por ese canal; con el canal intentado y los habilitados)
+ * o VERIFICATION_UNAVAILABLE.
  */
 @Slf4j
 @Service
@@ -70,6 +71,10 @@ public class RequestPhoneVerificationHandler
                                     tenant.id(), issued.id(), channel.value(), e.getClass().getSimpleName(),
                                     e instanceof VerificationDeliveryException de && de.getProviderCode() != null
                                             ? de.getProviderCode() : "-");
+                            if (e instanceof VerificationDeliveryException de
+                                    && de.getCode() == ErrorCode.RECIPIENT_UNREACHABLE) {
+                                return de.withChannels(channel, channels.enabled());
+                            }
                             return e instanceof LoyaltyException le
                                     && (le.getCode() == ErrorCode.VERIFICATION_UNAVAILABLE
                                         || le.getCode() == ErrorCode.RECIPIENT_UNREACHABLE)

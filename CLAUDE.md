@@ -120,6 +120,8 @@ Alta de la tarjeta del cliente (`/api/public/enroll/**`, públicos; diseño 12.6
   `VERIFICATION_ENABLED_CHANNELS` = canales disponibles. Canal desconocido, por defecto fuera de la lista o canal
   habilitado sin credenciales → la app no arranca. `channel` en la solicitud es opcional; desconocido/no habilitado
   → 400 `CHANNEL_NOT_AVAILABLE` antes de contar límites. Respuesta aditiva `channel` + `availableChannels`.
+  Errores con alternativa (`ChannelAlternatives`): `CHANNEL_NOT_AVAILABLE` agrega solo `availableChannels` (nunca
+  `channel`); `RECIPIENT_UNREACHABLE` agrega `channel` (el intentado) y `availableChannels`. Los demás errores: solo `{code, message}`.
 - Los límites (teléfono, IP, negocio), la vigencia y los intentos no dependen del canal; `phone_verifications.channel`
   (V6) es solo auditoría. Fallo de envío → la verificación se queda contando; `VerificationDeliveryException`:
   400 `RECIPIENT_UNREACHABLE` (Meta 131026, Twilio 21211) o 503 `VERIFICATION_UNAVAILABLE`, sin detalles del proveedor.
