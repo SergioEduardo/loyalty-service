@@ -44,6 +44,48 @@ jobs:
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - name: Verification channel secrets
+        id: verification
+        env:
+          SENDER: ${{ vars.VERIFICATION_SENDER }}
+          LISTED: ${{ vars.VERIFICATION_ENABLED_CHANNELS }}
+        run: |
+          # Misma lógica que EnrollConfig.verificationChannelPolicy: disabled (o vacía) y log no usan
+          # credenciales; whatsapp/sms habilitan VERIFICATION_ENABLED_CHANNELS o, si está vacía, solo ese canal.
+          # Solo se monta el secreto de un canal habilitado: un secreto sin versión hace fallar la revisión.
+          trim() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+          listed=()
+          IFS=',' read -ra names <<< "$LISTED"
+          for name in "${names[@]}"; do
+            name="$(trim "$name")"
+            case "$name" in
+              "") ;;
+              whatsapp|sms) [[ " ${listed[*]} " == *" $name "* ]] || listed+=("$name") ;;
+              *) echo "::error::VERIFICATION_ENABLED_CHANNELS solo admite whatsapp y sms, separados por comas"; exit 1 ;;
+            esac
+          done
+          sender="$(trim "$SENDER")"
+          enabled=()
+          case "${sender:-disabled}" in
+            disabled|log) ;;
+            whatsapp|sms)
+              if [ ${#listed[@]} -eq 0 ]; then enabled=("$sender"); else enabled=("${listed[@]}"); fi
+              if [[ " ${enabled[*]} " != *" $sender "* ]]; then
+                echo "::error::VERIFICATION_SENDER=$sender debe estar en VERIFICATION_ENABLED_CHANNELS"; exit 1
+              fi
+              ;;
+            *) echo "::error::VERIFICATION_SENDER debe ser disabled, log, whatsapp o sms"; exit 1 ;;
+          esac
+          {
+            echo "secrets<<EOF"
+            echo "DATABASE_URL=neon-database-url:latest"
+            echo "JWT_SIGNING_KEY=jwt-signing-key:latest"
+            echo "OTP_HASH_SALT=otp-hmac-salt:latest"
+            if [[ " ${enabled[*]} " == *" whatsapp "* ]]; then echo "WHATSAPP_ACCESS_TOKEN=whatsapp-api-token:latest"; fi
+            if [[ " ${enabled[*]} " == *" sms "* ]]; then echo "TWILIO_AUTH_TOKEN=twilio-auth-token:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Verification channels with secrets: ${enabled[*]:-none}"
       - uses: google-github-actions/deploy-cloudrun@v2
         with:
           service: ${{ env.SERVICE }}
@@ -80,7 +122,4 @@ jobs:
             ENROLL_CARD_IP_LIMIT_PER_HOUR=${{ vars.ENROLL_CARD_IP_LIMIT_PER_HOUR || '30' }}
             ENROLL_CODE_TTL_MINUTES=${{ vars.ENROLL_CODE_TTL_MINUTES || '10' }}
             ENROLL_MAX_ATTEMPTS=${{ vars.ENROLL_MAX_ATTEMPTS || '5' }}
-          secrets: |
-            DATABASE_URL=neon-database-url:latest
-            JWT_SIGNING_KEY=jwt-signing-key:latest
-            OTP_HASH_SALT=otp-hmac-salt:latest
+          secrets: ${{ steps.verification.outputs.secrets }}
