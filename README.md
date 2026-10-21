@@ -444,9 +444,23 @@ Variables del repo: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEP
 (se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
 numérica sin definir llega vacía y toma su valor por defecto. Secretos de Secret Manager: `DATABASE_URL`
 (`neon-database-url`), `JWT_SIGNING_KEY` (`jwt-signing-key`) y `OTP_HASH_SALT` (`otp-hmac-salt`); cada uno necesita
-al menos una versión o el despliegue falla. `WHATSAPP_ACCESS_TOKEN` y `TWILIO_AUTH_TOKEN` también van en Secret
-Manager; se cablean aparte en `loyalty-infra` y en el despliegue antes de habilitar `whatsapp` o `sms` (sin ellos,
-con el canal habilitado, el servicio no arranca).
+al menos una versión o el despliegue falla. `WHATSAPP_ACCESS_TOKEN` (`whatsapp-api-token`) y `TWILIO_AUTH_TOKEN`
+(`twilio-auth-token`) también van en Secret Manager (contenedores creados en `loyalty-infra`), pero el despliegue
+solo monta el de un canal habilitado: el paso "Verification channel secrets" del `ci.yml` aplica la misma lógica que
+la app a `VERIFICATION_SENDER` y `VERIFICATION_ENABLED_CHANNELS` (`disabled` y `log` no montan ninguno), porque una
+referencia `:latest` a un secreto sin versión hace que Cloud Run rechace la revisión. Una combinación que la app
+rechazaría (canal desconocido, canal por defecto fuera de la lista) hace fallar el job antes de desplegar.
+
+Orden para habilitar un canal:
+1. Cargar una versión del secreto del canal en Secret Manager.
+2. Después, habilitar el canal en las variables del repo (`VERIFICATION_SENDER` y/o `VERIFICATION_ENABLED_CHANNELS`)
+   junto con sus variables no secretas (`WHATSAPP_*`, `TWILIO_*`).
+3. Desplegar desde `main` (el siguiente merge). Al revés, el despliegue falla por el secreto sin versión.
+
+Deshabilitar un canal **no desmonta** su secreto ya montado: `deploy-cloudrun` usa por defecto
+`secrets_update_strategy: merge` (`gcloud run deploy --update-secrets`), que agrega o actualiza pero no quita los que
+el servicio ya tiene. Para retirarlo hay que quitarlo a mano del servicio (`gcloud run services update
+--remove-secrets=…`); mientras siga montado, su secreto debe conservar una versión habilitada.
 
 ## Estructura
 ```
