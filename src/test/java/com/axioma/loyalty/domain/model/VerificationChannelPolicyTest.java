@@ -3,6 +3,7 @@ package com.axioma.loyalty.domain.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.axioma.loyalty.domain.model.error.ChannelNotAvailableException;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
 import java.util.List;
@@ -37,6 +38,22 @@ class VerificationChannelPolicyTest {
                             e -> assertThat(e.getCode()).isEqualTo(ErrorCode.CHANNEL_NOT_AVAILABLE))
                     .hasMessage("Ese medio de envío no está disponible.");
         }
+    }
+
+    @Test
+    void channelNotAvailableCarriesOnlyTheEnabledChannels() {
+        for (String channel : new String[]{"sms", "telegram"}) {
+            assertThatThrownBy(() -> onlyWhatsApp.resolve(channel))
+                    .isInstanceOfSatisfying(ChannelNotAvailableException.class, e -> {
+                        assertThat(e.getAttemptedChannel()).isNull();
+                        assertThat(e.getAvailableChannels()).containsExactly(VerificationChannel.WHATSAPP);
+                    });
+        }
+        assertThatThrownBy(() -> VerificationChannelPolicy.none().resolve(null))
+                .isInstanceOfSatisfying(ChannelNotAvailableException.class, e -> {
+                    assertThat(e.getAttemptedChannel()).isNull();
+                    assertThat(e.getAvailableChannels()).isEmpty();
+                });
     }
 
     @Test

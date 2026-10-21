@@ -174,6 +174,37 @@ class RequestPhoneVerificationHandlerTest {
     }
 
     @Test
+    void recipientUnreachableCarriesTheAttemptedAndEnabledChannels() {
+        when(sender.send(any())).thenReturn(Mono.error(VerificationDeliveryException.recipientUnreachable("21211")));
+
+        StepVerifier.create(handler(new VerificationChannelPolicy(VerificationChannel.WHATSAPP, BOTH))
+                        .handle(command("sms")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOfSatisfying(VerificationDeliveryException.class,
+                        de -> {
+                            assertThat(de.getCode()).isEqualTo(ErrorCode.RECIPIENT_UNREACHABLE);
+                            assertThat(de.getProviderCode()).isEqualTo("21211");
+                            assertThat(de.getAttemptedChannel()).isEqualTo(VerificationChannel.SMS);
+                            assertThat(de.getAvailableChannels()).isEqualTo(BOTH);
+                        }))
+                .verify();
+    }
+
+    @Test
+    void unavailableCarriesNoChannels() {
+        when(sender.send(any())).thenReturn(Mono.error(VerificationDeliveryException.unavailable("500")));
+
+        StepVerifier.create(handler(new VerificationChannelPolicy(VerificationChannel.WHATSAPP, BOTH))
+                        .handle(command("sms")))
+                .expectErrorSatisfies(e -> assertThat(e).isInstanceOfSatisfying(VerificationDeliveryException.class,
+                        de -> {
+                            assertThat(de.getCode()).isEqualTo(ErrorCode.VERIFICATION_UNAVAILABLE);
+                            assertThat(de.getAttemptedChannel()).isNull();
+                            assertThat(de.getAvailableChannels()).isNull();
+                        }))
+                .verify();
+    }
+
+    @Test
     void anyOtherSendFailureIsUnavailable(CapturedOutput output) {
         when(sender.send(any())).thenReturn(Mono.error(new IllegalStateException("caído " + E164)));
 

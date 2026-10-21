@@ -246,7 +246,9 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         for (int i = 0; i < 3; i++) {
             requestCode(slug, phone).expectStatus().isEqualTo(503)
                     .expectBody().jsonPath("$.code").isEqualTo("VERIFICATION_UNAVAILABLE")
-                    .jsonPath("$.message").isEqualTo("No pudimos enviar el código. Intenta de nuevo.");
+                    .jsonPath("$.message").isEqualTo("No pudimos enviar el código. Intenta de nuevo.")
+                    .jsonPath("$.channel").doesNotExist()
+                    .jsonPath("$.availableChannels").doesNotExist();
         }
         assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isEqualTo(3);
         requestCode(slug, phone).expectStatus().isEqualTo(429);
@@ -281,7 +283,9 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
             requestCode(slug, freshNationalPhone(), ip, channel).expectStatus().isBadRequest()
                     .expectBody()
                     .jsonPath("$.code").isEqualTo("CHANNEL_NOT_AVAILABLE")
-                    .jsonPath("$.message").isEqualTo("Ese medio de envío no está disponible.");
+                    .jsonPath("$.message").isEqualTo("Ese medio de envío no está disponible.")
+                    .jsonPath("$.availableChannels").isEqualTo(List.of("whatsapp", "sms"))
+                    .jsonPath("$.channel").doesNotExist();
         }
         assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isZero();
         // No gastó el límite por IP (5): la misma IP sigue pudiendo pedir códigos.
@@ -325,6 +329,18 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
     }
 
     @Test
+    void recipientUnreachableWithTheDefaultChannelNamesIt() {
+        doReturn(Mono.error(VerificationDeliveryException.recipientUnreachable("131026"))).when(sender).send(any());
+        String slug = newSlug();
+        createTenant(slug);
+        requestCode(slug, freshNationalPhone(), freshIp(), null).expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("RECIPIENT_UNREACHABLE")
+                .jsonPath("$.channel").isEqualTo("whatsapp")
+                .jsonPath("$.availableChannels").isEqualTo(List.of("whatsapp", "sms"));
+    }
+
+    @Test
     void recipientUnreachableIs400AndStillCounts(CapturedOutput output) {
         doReturn(Mono.error(VerificationDeliveryException.recipientUnreachable("131026"))).when(sender).send(any());
         String slug = newSlug();
@@ -335,10 +351,16 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
                     .expectBody()
                     .jsonPath("$.code").isEqualTo("RECIPIENT_UNREACHABLE")
                     .jsonPath("$.message")
-                    .isEqualTo("No pudimos enviar el código a ese número por este medio. Prueba con otro.");
+                    .isEqualTo("No pudimos enviar el código a ese número por este medio. Prueba con otro.")
+                    .jsonPath("$.channel").isEqualTo(channel)
+                    .jsonPath("$.availableChannels").isEqualTo(List.of("whatsapp", "sms"));
         }
         assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isEqualTo(3);
-        requestCode(slug, phone, freshIp(), "sms").expectStatus().isEqualTo(429);
+        // El límite sigue igual y su error no lleva canales.
+        @SuppressWarnings("unchecked")
+        Map<String, Object> limited = requestCode(slug, phone, freshIp(), "sms").expectStatus().isEqualTo(429)
+                .expectBody(Map.class).returnResult().getResponseBody();
+        assertThat(limited).containsOnlyKeys("code", "message").containsEntry("code", "RATE_LIMITED");
         assertThat(output.getAll()).contains("providerCode=131026").doesNotContain(phone).doesNotContain(e164(phone));
     }
 

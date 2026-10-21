@@ -13,10 +13,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -25,10 +23,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 /**
  * VERIFICATION_SENDER=log con APP_ENV=dev y solo sms habilitado: el log reemplaza al canal y el código
  * sale en un log INFO con el canal (y sirve para dar la tarjeta), pero ni el teléfono, ni el nombre, ni el
- * hash, ni la IP. Un canal no habilitado responde CHANNEL_NOT_AVAILABLE. Se omite sin Docker.
+ * hash, ni la IP. Los errores de canal (LogSenderChannelErrorsSupport) listan solo sms. Se omite sin Docker.
  */
 @Testcontainers(disabledWithoutDocker = true)
-@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
@@ -37,7 +34,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
                 "app.enroll.verification-enabled-channels=sms",
                 "app.enroll.app-env=dev"
         })
-class EnrollmentLogSenderIT extends EnrollmentItSupport {
+class EnrollmentLogSenderIT extends LogSenderChannelErrorsSupport {
 
     private static final FakeWalletService WALLET = new FakeWalletService();
 
@@ -87,15 +84,13 @@ class EnrollmentLogSenderIT extends EnrollmentItSupport {
                 .singleElement().asString().contains("VERIFICATION_SENDER=log");
     }
 
-    @Test
-    void channelThatIsNotEnabledIs400(CapturedOutput output) {
-        String slug = newSlug();
-        UUID tenantId = createTenant(slug);
-        requestCode(slug, freshNationalPhone(), freshIp(), "whatsapp").expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("CHANNEL_NOT_AVAILABLE")
-                .jsonPath("$.message").isEqualTo("Ese medio de envío no está disponible.");
-        assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isZero();
-        assertThat(output.getAll()).doesNotContain("Verification code (VERIFICATION_SENDER=log) tenantId=" + tenantId);
+    @Override
+    List<String> expectedChannels() {
+        return List.of("sms");
+    }
+
+    @Override
+    String channelNotEnabled() {
+        return "whatsapp";
     }
 }

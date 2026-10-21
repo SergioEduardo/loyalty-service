@@ -65,7 +65,8 @@ Cuerpos (JSON):
 // PUT /api/staff/tenant/settings  (todos obligatorios; pointsGoal > 0, segundos ≥ 0, rewardText ≤ 100)
 { "pointsGoal": 10, "rewardText": "Café gratis", "cooldownSeconds": 0, "undoWindowSeconds": 300 }
 ```
-Errores: `{ "code": "...", "message": "..." }`. 400 `INVALID_SLUG`, `INVALID_TEXT`,
+Errores: `{ "code": "...", "message": "..." }` (solo `CHANNEL_NOT_AVAILABLE` y `RECIPIENT_UNREACHABLE`
+agregan `availableChannels` y, el segundo, `channel`; ver "Alta de la tarjeta"). 400 `INVALID_SLUG`, `INVALID_TEXT`,
 `INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`, `INVALID_ACTIVATION`,
 `INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`, `INVALID_PHONE`, `INVALID_NAME`, `INVALID_CODE`, `CODE_EXPIRED`,
 `CHANNEL_NOT_AVAILABLE`, `RECIPIENT_UNREACHABLE`, `TOO_MANY_ATTEMPTS` (solo el alta: intentos del código agotados); 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`,
@@ -142,10 +143,12 @@ POST /api/public/enroll/card {slug, phone, name, verificationId, code}
 { "slug": "mi-cafe", "phone": "55 1234 5678", "channel": "sms" }
 // 200 (channel: el usado; availableChannels: los habilitados, en el orden de VERIFICATION_ENABLED_CHANNELS)
 { "verificationId": "3f1c…", "expiresAt": "2026-10-13T12:10:00Z", "channel": "sms", "availableChannels": ["whatsapp", "sms"] }
-// 400 canal desconocido o no habilitado (el mismo cuerpo en los dos casos)
-{ "code": "CHANNEL_NOT_AVAILABLE", "message": "Ese medio de envío no está disponible." }
-// 400 el número no puede recibir por ese canal (Meta 131026, Twilio 21211): la página puede ofrecer el otro canal
-{ "code": "RECIPIENT_UNREACHABLE", "message": "No pudimos enviar el código a ese número por este medio. Prueba con otro." }
+// 400 canal desconocido o no habilitado (el mismo cuerpo en los dos casos; nunca lleva channel)
+// availableChannels: los habilitados, en el orden de VERIFICATION_ENABLED_CHANNELS
+{ "code": "CHANNEL_NOT_AVAILABLE", "message": "Ese medio de envío no está disponible.", "availableChannels": ["whatsapp", "sms"] }
+// 400 el número no puede recibir por ese canal (Meta 131026, Twilio 21211): la página puede ofrecer otro de availableChannels
+// channel: el canal por el que se intentó (el pedido o, sin channel, el de por defecto)
+{ "code": "RECIPIENT_UNREACHABLE", "message": "No pudimos enviar el código a ese número por este medio. Prueba con otro.", "channel": "sms", "availableChannels": ["whatsapp", "sms"] }
 // POST /api/public/enroll/card
 { "slug": "mi-cafe", "phone": "55 1234 5678", "name": "Ana López", "verificationId": "3f1c…", "code": "042137" }
 // 200 (nunca lleva el nombre ni el teléfono; el cardId solo va dentro del enlace del wallet-service)
@@ -157,6 +160,9 @@ Pedir el código:
 - Canal: `channel` opcional (`whatsapp` | `sms`, sin distinguir mayúsculas; ausente o vacío = el de por
   defecto). Desconocido o no habilitado: 400 `CHANNEL_NOT_AVAILABLE`, antes de contar cualquier límite.
   La respuesta agrega `channel` y `availableChannels`; un cliente anterior que no manda `channel` sigue igual.
+  El error `CHANNEL_NOT_AVAILABLE` agrega `availableChannels` (sin `channel`) y `RECIPIENT_UNREACHABLE` agrega
+  `channel` (el intentado) y `availableChannels`. Son campos aditivos: `code` y `message` no cambian y los demás
+  errores (incluidos `VERIFICATION_UNAVAILABLE` y `RATE_LIMITED`) siguen siendo solo `{code, message}`.
 - Límites por hora (429 `RATE_LIMITED` con `Retry-After`): 3 códigos por teléfono y negocio
   (`ENROLL_PHONE_LIMIT_PER_HOUR`, contado con `phone_verifications.created_at`, con un bloqueo por teléfono
   para que dos solicitudes simultáneas no pasen las dos), 10 por IP (`ENROLL_IP_LIMIT_PER_HOUR`) y 60 por

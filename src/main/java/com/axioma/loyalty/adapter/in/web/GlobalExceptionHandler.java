@@ -1,5 +1,7 @@
 package com.axioma.loyalty.adapter.in.web;
 
+import com.axioma.loyalty.domain.model.VerificationChannel;
+import com.axioma.loyalty.domain.model.error.ChannelAlternatives;
 import com.axioma.loyalty.domain.model.error.ErrorCode;
 import com.axioma.loyalty.domain.model.error.LoyaltyException;
 import com.axioma.loyalty.domain.model.error.RetryAfter;
@@ -30,7 +32,17 @@ public class GlobalExceptionHandler {
         if (ex instanceof RetryAfter retryAfter) {
             response.header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfter.getRetryAfterSeconds()));
         }
-        return response.body(new ApiError(ex.getCode().name(), ex.getMessage()));
+        return response.body(body(ex));
+    }
+
+    private static ApiError body(LoyaltyException ex) {
+        if (ex instanceof ChannelAlternatives alternatives && alternatives.getAvailableChannels() != null) {
+            VerificationChannel attempted = alternatives.getAttemptedChannel();
+            return new ApiError(ex.getCode().name(), ex.getMessage(),
+                    attempted == null ? null : attempted.value(),
+                    alternatives.getAvailableChannels().stream().map(VerificationChannel::value).toList());
+        }
+        return new ApiError(ex.getCode().name(), ex.getMessage());
     }
 
     /** Rutas inexistentes, cuerpos mal formados, parámetros inválidos. */

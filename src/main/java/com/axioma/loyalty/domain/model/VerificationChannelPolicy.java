@@ -1,7 +1,6 @@
 package com.axioma.loyalty.domain.model;
 
-import com.axioma.loyalty.domain.model.error.ErrorCode;
-import com.axioma.loyalty.domain.model.error.LoyaltyException;
+import com.axioma.loyalty.domain.model.error.ChannelNotAvailableException;
 import java.util.List;
 
 /**
@@ -23,17 +22,17 @@ public record VerificationChannelPolicy(VerificationChannel defaultChannel, List
 
     /**
      * Canal para una solicitud: sin valor (null o vacío), el canal por defecto. Un canal desconocido o no
-     * habilitado es CHANNEL_NOT_AVAILABLE, sin distinguir entre los dos casos.
+     * habilitado es CHANNEL_NOT_AVAILABLE, sin distinguir entre los dos casos; lleva los canales habilitados.
      */
     public VerificationChannel resolve(String requested) {
         if (requested == null || requested.isBlank()) {
             if (defaultChannel == null) {
-                throw new LoyaltyException(ErrorCode.CHANNEL_NOT_AVAILABLE);
+                throw new ChannelNotAvailableException(enabled);
             }
             return defaultChannel;
         }
         return VerificationChannel.parse(requested)
                 .filter(enabled::contains)
-                .orElseThrow(() -> new LoyaltyException(ErrorCode.CHANNEL_NOT_AVAILABLE));
+                .orElseThrow(() -> new ChannelNotAvailableException(enabled));
     }
 }
