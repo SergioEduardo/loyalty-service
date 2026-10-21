@@ -82,9 +82,17 @@ abstract class EnrollmentItSupport {
     }
 
     WebTestClient.ResponseSpec requestCode(String slug, String phone, String ip) {
+        return requestCode(slug, phone, ip, null);
+    }
+
+    /** channel null: sin el campo (contrato anterior). */
+    WebTestClient.ResponseSpec requestCode(String slug, String phone, String ip, String channel) {
         var body = new java.util.HashMap<String, Object>();
         body.put("slug", slug);
         body.put("phone", phone);
+        if (channel != null) {
+            body.put("channel", channel);
+        }
         return client.post().uri("/api/public/enroll/verification")
                 .header("X-Forwarded-For", ip)
                 .contentType(MediaType.APPLICATION_JSON)

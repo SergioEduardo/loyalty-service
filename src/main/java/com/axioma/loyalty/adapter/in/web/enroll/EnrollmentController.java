@@ -29,9 +29,10 @@ public class EnrollmentController {
     @PostMapping("/verification")
     public Mono<PhoneVerificationResponse> requestVerification(
             @RequestBody(required = false) PhoneVerificationRequest request, ServerHttpRequest httpRequest) {
-        var body = request == null ? new PhoneVerificationRequest(null, null) : request;
+        var body = request == null ? new PhoneVerificationRequest(null, null, null) : request;
         return requestPhoneVerificationHandler
-                .handle(new RequestPhoneVerificationCommand(body.slug(), body.phone(), ClientIp.of(httpRequest)))
+                .handle(new RequestPhoneVerificationCommand(body.slug(), body.phone(), body.channel(),
+                        ClientIp.of(httpRequest)))
                 .map(PhoneVerificationResponse::from);
     }
 

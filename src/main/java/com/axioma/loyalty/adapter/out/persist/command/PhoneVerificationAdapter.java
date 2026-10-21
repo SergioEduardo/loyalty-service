@@ -5,6 +5,7 @@ import com.axioma.loyalty.domain.model.IssuedVerification;
 import com.axioma.loyalty.domain.model.PhoneE164;
 import com.axioma.loyalty.domain.model.PhoneVerificationState;
 import com.axioma.loyalty.domain.model.RecentRequests;
+import com.axioma.loyalty.domain.model.VerificationChannel;
 import com.axioma.loyalty.domain.model.VerificationAttempt;
 import com.axioma.loyalty.domain.port.out.PhoneVerificationRepository;
 import java.time.OffsetDateTime;
@@ -49,11 +50,13 @@ public class PhoneVerificationAdapter implements PhoneVerificationRepository {
     }
 
     @Override
-    public Mono<IssuedVerification> create(UUID tenantId, PhoneE164 phone, String codeHash, int ttlMinutes) {
+    public Mono<IssuedVerification> create(UUID tenantId, PhoneE164 phone, String codeHash,
+                                           VerificationChannel channel, int ttlMinutes) {
         return databaseClient.sql(INSERT)
                 .bind("tenantId", tenantId)
                 .bind("phone", phone.value())
                 .bind("codeHash", codeHash)
+                .bind("channel", channel.value())
                 .bind("ttlMinutes", ttlMinutes)
                 .map(row -> new IssuedVerification(row.get("id", UUID.class),
                         row.get("expires_at", OffsetDateTime.class).toInstant()))

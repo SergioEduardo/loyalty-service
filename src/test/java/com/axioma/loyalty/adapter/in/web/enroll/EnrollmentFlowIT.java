@@ -7,7 +7,9 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
 
 import com.axioma.loyalty.adapter.out.wallet.ServiceIdTokenSource;
+import com.axioma.loyalty.domain.model.VerificationChannel;
 import com.axioma.loyalty.domain.model.VerificationMessage;
+import com.axioma.loyalty.domain.model.error.VerificationDeliveryException;
 import com.axioma.loyalty.domain.port.out.PhoneVerificationSenderPort;
 import com.axioma.loyalty.support.FakeWalletService;
 import java.time.Duration;
@@ -36,7 +38,8 @@ import reactor.core.publisher.Mono;
 
 /**
  * Alta de la tarjeta de punta a punta (12.6 y 12.7) contra un Postgres real y un wallet-service falso.
- * El envío del código se sustituye por un mock que guarda el código por verificationId. Cada prueba usa
+ * El envío del código se sustituye por un mock que guarda el código y el canal por verificationId (canales
+ * whatsapp, el de por defecto, y sms). Cada prueba usa
  * su propio negocio, teléfono e IPs. Se omite sin Docker.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -45,6 +48,8 @@ import reactor.core.publisher.Mono;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "app.enroll.otp-hash-salt=" + EnrollmentItSupport.SALT,
+                "app.enroll.verification-sender=whatsapp",
+                "app.enroll.verification-enabled-channels=whatsapp,sms",
                 "app.enroll.phone-limit-per-hour=3",
                 "app.enroll.ip-limit-per-hour=5",
                 "app.enroll.tenant-limit-per-hour=6",
@@ -77,6 +82,7 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
     ServiceIdTokenSource idTokens;
 
     private final Map<String, String> codes = new ConcurrentHashMap<>();
+    private final Map<String, VerificationChannel> channels = new ConcurrentHashMap<>();
 
     @BeforeEach
     void stubs() throws Exception {
@@ -87,6 +93,7 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         when(sender.send(any())).thenAnswer(invocation -> {
             VerificationMessage message = invocation.getArgument(0);
             codes.put(message.verificationId().toString(), message.code());
+            channels.put(message.verificationId().toString(), message.channel());
             return Mono.empty();
         });
     }
@@ -103,24 +110,29 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         @SuppressWarnings("unchecked")
         Map<String, Object> body = requestCode(slug, phone).expectStatus().isOk()
                 .expectBody(Map.class).returnResult().getResponseBody();
-        assertThat(body).containsOnlyKeys("verificationId", "expiresAt");
+        assertThat(body).containsOnlyKeys("verificationId", "expiresAt", "channel", "availableChannels");
+        assertThat(body.get("channel")).isEqualTo("whatsapp");
+        assertThat(body.get("availableChannels")).isEqualTo(List.of("whatsapp", "sms"));
         String id = (String) body.get("verificationId");
+        assertThat(channels.get(id)).isEqualTo(VerificationChannel.WHATSAPP);
         Instant expiresAt = Instant.parse((String) body.get("expiresAt"));
         assertThat(Duration.between(before, expiresAt)).isBetween(Duration.ofMinutes(9), Duration.ofMinutes(11));
 
         String code = codes.get(id);
         assertThat(code).matches("[0-9]{6}");
-        var row = db.sql("SELECT phone_e164, code_hash, attempts, verified_at, expires_at FROM loyalty.phone_verifications WHERE id = :id")
+        var row = db.sql("SELECT phone_e164, code_hash, channel, attempts, verified_at, expires_at FROM loyalty.phone_verifications WHERE id = :id")
                 .bind("id", UUID.fromString(id))
                 .map(r -> Map.of(
                         "phone", r.get("phone_e164", String.class),
                         "hash", r.get("code_hash", String.class),
+                        "channel", r.get("channel", String.class),
                         "attempts", r.get("attempts", Integer.class),
                         "verified", r.get("verified_at", OffsetDateTime.class) != null,
                         "expires", r.get("expires_at", OffsetDateTime.class).toInstant()))
                 .one().block();
         assertThat(row.get("phone")).isEqualTo(e164(phone));
         assertThat((String) row.get("hash")).hasSize(64).isEqualTo(hmac(tenantId, e164(phone), code)).doesNotContain(code);
+        assertThat(row.get("channel")).isEqualTo("whatsapp");
         assertThat(row.get("attempts")).isEqualTo(0);
         assertThat(row.get("verified")).isEqualTo(false);
         assertThat(row.get("expires")).isEqualTo(expiresAt);
@@ -240,6 +252,96 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         requestCode(slug, phone).expectStatus().isEqualTo(429);
     }
 
+    // --- canal del código ---
+
+    @Test
+    void requestedSmsChannelIsUsedAndStored() {
+        String slug = newSlug();
+        createTenant(slug);
+        String phone = freshNationalPhone();
+        for (String channel : List.of("sms", "SMS")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> body = requestCode(slug, phone, freshIp(), channel).expectStatus().isOk()
+                    .expectBody(Map.class).returnResult().getResponseBody();
+            assertThat(body.get("channel")).isEqualTo("sms");
+            assertThat(body.get("availableChannels")).isEqualTo(List.of("whatsapp", "sms"));
+            String id = (String) body.get("verificationId");
+            assertThat(channels.get(id)).isEqualTo(VerificationChannel.SMS);
+            assertThat(db.sql("SELECT channel FROM loyalty.phone_verifications WHERE id = :id")
+                    .bind("id", UUID.fromString(id)).map(r -> r.get(0, String.class)).one().block()).isEqualTo("sms");
+        }
+    }
+
+    @Test
+    void unknownChannelIs400AndSpendsNothing() {
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        String ip = "198.51.100.40";
+        for (String channel : List.of("telegram", "email", "log", "whatsapp,sms")) {
+            requestCode(slug, freshNationalPhone(), ip, channel).expectStatus().isBadRequest()
+                    .expectBody()
+                    .jsonPath("$.code").isEqualTo("CHANNEL_NOT_AVAILABLE")
+                    .jsonPath("$.message").isEqualTo("Ese medio de envío no está disponible.");
+        }
+        assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isZero();
+        // No gastó el límite por IP (5): la misma IP sigue pudiendo pedir códigos.
+        for (int i = 0; i < 5; i++) {
+            requestCode(slug, freshNationalPhone(), ip, "sms").expectStatus().isOk();
+        }
+    }
+
+    @Test
+    void switchingChannelSharesThePhoneLimitAndExpiry() {
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        String phone = freshNationalPhone();
+        requestCode(slug, phone, freshIp(), "whatsapp").expectStatus().isOk();
+        requestCode(slug, phone, freshIp(), "sms").expectStatus().isOk();
+        requestCode(slug, phone, freshIp(), null).expectStatus().isOk();
+        for (String channel : List.of("sms", "whatsapp")) {
+            requestCode(slug, phone, freshIp(), channel).expectStatus().isEqualTo(429)
+                    .expectHeader().exists("Retry-After")
+                    .expectBody().jsonPath("$.code").isEqualTo("RATE_LIMITED");
+        }
+        assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isEqualTo(3);
+        // Misma vigencia y mismo máximo de intentos sin importar el canal.
+        assertThat(db.sql("""
+                        SELECT count(DISTINCT round(EXTRACT(EPOCH FROM expires_at - created_at))) FROM loyalty.phone_verifications
+                         WHERE tenant_id = :t""")
+                .bind("t", tenantId).map(r -> r.get(0, Long.class)).one().block()).isEqualTo(1);
+    }
+
+    @Test
+    void codeSentBySmsEnrollsLikeAnyOther() {
+        String slug = newSlug();
+        createTenant(slug);
+        String phone = freshNationalPhone();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> body = requestCode(slug, phone, freshIp(), "sms").expectStatus().isOk()
+                .expectBody(Map.class).returnResult().getResponseBody();
+        String id = (String) body.get("verificationId");
+        enroll(slug, phone, "Ana", id, codes.get(id)).expectStatus().isOk()
+                .expectBody().jsonPath("$.isNew").isEqualTo(true);
+    }
+
+    @Test
+    void recipientUnreachableIs400AndStillCounts(CapturedOutput output) {
+        doReturn(Mono.error(VerificationDeliveryException.recipientUnreachable("131026"))).when(sender).send(any());
+        String slug = newSlug();
+        UUID tenantId = createTenant(slug);
+        String phone = freshNationalPhone();
+        for (String channel : List.of("whatsapp", "sms", "whatsapp")) {
+            requestCode(slug, phone, freshIp(), channel).expectStatus().isBadRequest()
+                    .expectBody()
+                    .jsonPath("$.code").isEqualTo("RECIPIENT_UNREACHABLE")
+                    .jsonPath("$.message")
+                    .isEqualTo("No pudimos enviar el código a ese número por este medio. Prueba con otro.");
+        }
+        assertThat(count("SELECT count(*) FROM loyalty.phone_verifications WHERE tenant_id = :t", tenantId)).isEqualTo(3);
+        requestCode(slug, phone, freshIp(), "sms").expectStatus().isEqualTo(429);
+        assertThat(output.getAll()).contains("providerCode=131026").doesNotContain(phone).doesNotContain(e164(phone));
+    }
+
     @Test
     void responseDoesNotRevealExistingCard() {
         String slug = newSlug();
@@ -257,7 +359,7 @@ class EnrollmentFlowIT extends EnrollmentItSupport {
         @SuppressWarnings("unchecked")
         Map<String, Object> bodyB = b.getResponseBody().blockFirst();
         assertThat(bodyA.keySet()).isEqualTo(bodyB.keySet());
-        assertThat(bodyA).containsOnlyKeys("verificationId", "expiresAt");
+        assertThat(bodyA).containsOnlyKeys("verificationId", "expiresAt", "channel", "availableChannels");
         assertThat(a.getResponseHeaders().keySet()).isEqualTo(b.getResponseHeaders().keySet());
     }
 

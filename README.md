@@ -37,7 +37,7 @@ Java 21, Spring Boot + WebFlux, R2DBC, Gradle Kotlin DSL, arquitectura hexagonal
 | `PUT /api/staff/tenant/settings` | 200 | Meta de puntos, premio, espera y ventana para deshacer (solo OWNER); devuelve el perfil |
 | `PUT /api/staff/tenant/logo` | 200 | Sube el logo: `multipart/form-data`, campo `file` (solo OWNER); devuelve el perfil |
 | `DELETE /api/staff/tenant/logo` | 204 | Quita el logo (solo OWNER); idempotente |
-| `POST /api/public/enroll/verification` | 200 | Pide un código para el teléfono (sin autenticación): `{slug, phone}` → `{verificationId, expiresAt}` |
+| `POST /api/public/enroll/verification` | 200 | Pide un código para el teléfono (sin autenticación): `{slug, phone, channel?}` → `{verificationId, expiresAt, channel, availableChannels}` |
 | `POST /api/public/enroll/card` | 200 | Da la tarjeta con el código (sin autenticación): `{slug, phone, name, verificationId, code}` → `{isNew, apple, google}` |
 | `POST /internal/outbox/publish` | 200 | Publica un lote de avisos pendientes (Cloud Scheduler): `{claimed, published, failed}` |
 
@@ -68,7 +68,7 @@ Cuerpos (JSON):
 Errores: `{ "code": "...", "message": "..." }`. 400 `INVALID_SLUG`, `INVALID_TEXT`,
 `INVALID_BRAND_COLOR`, `INVALID_SETTINGS`, `INVALID_USER`, `WEAK_PASSWORD`, `INVALID_REQUEST`, `INVALID_ACTIVATION`,
 `INVALID_IMAGE`, `IMAGE_DIMENSIONS_TOO_LARGE`, `INVALID_PHONE`, `INVALID_NAME`, `INVALID_CODE`, `CODE_EXPIRED`,
-`TOO_MANY_ATTEMPTS` (solo el alta: intentos del código agotados); 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`,
+`CHANNEL_NOT_AVAILABLE`, `RECIPIENT_UNREACHABLE`, `TOO_MANY_ATTEMPTS` (solo el alta: intentos del código agotados); 401 `UNAUTHORIZED`, `INVALID_CREDENTIALS`,
 `INVALID_SESSION`; 403 `FORBIDDEN`; 404 `TENANT_NOT_FOUND`, `USER_NOT_FOUND`; 409 `SLUG_ALREADY_EXISTS`,
 `USERNAME_TAKEN`, `USER_INACTIVE`, `TEMPLATE_NOT_READY`; 413 `LOGO_TOO_LARGE`; 415 `UNSUPPORTED_IMAGE_FORMAT`;
 429 `TOO_MANY_ATTEMPTS` (login y activación), `RATE_LIMITED` (alta), ambos con `Retry-After`; 500 `INTERNAL_ERROR`;
@@ -129,17 +129,23 @@ Diseño 12.6 y 12.7. Página de alta de la PWA: lee la identidad del negocio de
 `GET /api/public/tenants/{slug}/identity` (`{slug, name, description, logoUrl, brandColor}`, solo negocios
 activos; si no, 404 `TENANT_NOT_FOUND`) y luego:
 ```text
-POST /api/public/enroll/verification {slug, phone}
-     └─► 200 {verificationId, expiresAt}          (el código llega por WhatsApp; vale 10 min)
+POST /api/public/enroll/verification {slug, phone, channel?}
+     └─► 200 {verificationId, expiresAt, channel, availableChannels}
+         (el código llega por WhatsApp o SMS; vale 10 min)
 POST /api/public/enroll/card {slug, phone, name, verificationId, code}
      └─► 200 {isNew, apple: {url, expiresAt}, google: null}
          (apple.url: enlace firmado del wallet-service para descargar el .pkpass; vale 10 min)
 ```
 ```jsonc
 // POST /api/public/enroll/verification   (phone: con o sin +52; espacios, guiones y paréntesis se ignoran)
-{ "slug": "mi-cafe", "phone": "55 1234 5678" }
-// 200
-{ "verificationId": "3f1c…", "expiresAt": "2026-10-13T12:10:00Z" }
+// channel (opcional): "whatsapp" | "sms"; sin él, el canal por defecto (VERIFICATION_SENDER)
+{ "slug": "mi-cafe", "phone": "55 1234 5678", "channel": "sms" }
+// 200 (channel: el usado; availableChannels: los habilitados, en el orden de VERIFICATION_ENABLED_CHANNELS)
+{ "verificationId": "3f1c…", "expiresAt": "2026-10-13T12:10:00Z", "channel": "sms", "availableChannels": ["whatsapp", "sms"] }
+// 400 canal desconocido o no habilitado (el mismo cuerpo en los dos casos)
+{ "code": "CHANNEL_NOT_AVAILABLE", "message": "Ese medio de envío no está disponible." }
+// 400 el número no puede recibir por ese canal (Meta 131026, Twilio 21211): la página puede ofrecer el otro canal
+{ "code": "RECIPIENT_UNREACHABLE", "message": "No pudimos enviar el código a ese número por este medio. Prueba con otro." }
 // POST /api/public/enroll/card
 { "slug": "mi-cafe", "phone": "55 1234 5678", "name": "Ana López", "verificationId": "3f1c…", "code": "042137" }
 // 200 (nunca lleva el nombre ni el teléfono; el cardId solo va dentro del enlace del wallet-service)
@@ -148,16 +154,24 @@ POST /api/public/enroll/card {slug, phone, name, verificationId, code}
 Pedir el código:
 - Teléfono a E.164 con libphonenumber (México por defecto; también acepta el antiguo `+52 1`). Si no:
   400 `INVALID_PHONE`. Slug inválido, inexistente o inactivo: 404 `TENANT_NOT_FOUND`.
+- Canal: `channel` opcional (`whatsapp` | `sms`, sin distinguir mayúsculas; ausente o vacío = el de por
+  defecto). Desconocido o no habilitado: 400 `CHANNEL_NOT_AVAILABLE`, antes de contar cualquier límite.
+  La respuesta agrega `channel` y `availableChannels`; un cliente anterior que no manda `channel` sigue igual.
 - Límites por hora (429 `RATE_LIMITED` con `Retry-After`): 3 códigos por teléfono y negocio
   (`ENROLL_PHONE_LIMIT_PER_HOUR`, contado con `phone_verifications.created_at`, con un bloqueo por teléfono
   para que dos solicitudes simultáneas no pasen las dos), 10 por IP (`ENROLL_IP_LIMIT_PER_HOUR`) y 60 por
   negocio (`ENROLL_TENANT_LIMIT_PER_HOUR`). Los de IP y negocio usan `loyalty.enroll_rate_limits` (ventana
   fija de una hora, como `activation_attempts`); la IP va como SHA-256, nunca en claro. Cada solicitud
-  cuenta, se acepte o no.
+  cuenta, se acepte o no. **Los límites, la vigencia y los intentos no dependen del canal**: pedir por WhatsApp
+  y luego por SMS gasta dos de los 3 lugares del teléfono, y cada código tiene su propia vigencia e intentos
+  (cambiar de canal no los reinicia ni los duplica). El canal queda en `phone_verifications.channel` (V6) solo
+  para auditoría.
 - Código de 6 dígitos (`SecureRandom`), vigencia `ENROLL_CODE_TTL_MINUTES`, 0 intentos. En la base solo
   `code_hash` = HMAC-SHA256 en hex con llave `OTP_HASH_SALT` de `"{tenantId}|{phoneE164}|{código}"`.
 - Nunca consulta tarjetas: la respuesta y el tiempo son los mismos tenga o no tarjeta el teléfono.
-- Si el envío falla: 503 `VERIFICATION_UNAVAILABLE`, y la verificación creada sigue contando para el límite.
+- Si el envío falla, la verificación creada sigue contando para el límite: 400 `RECIPIENT_UNREACHABLE` si el
+  número no puede recibir por ese canal; cualquier otro fallo del proveedor (red, tiempo agotado, 4xx/5xx,
+  credenciales) 503 `VERIFICATION_UNAVAILABLE`. La respuesta nunca lleva detalles del proveedor.
 
 Dar la tarjeta:
 - Nombre: texto plano de 1 a 80 caracteres (recortado; sin controles, `<`, `>` ni controles bidi), si no
@@ -183,19 +197,61 @@ Dar la tarjeta:
   cliente reintenta con el mismo código hasta que venza (el reintento responde `isNew: false`).
 - `google` es `null` hasta conectar Google Wallet.
 
-Envío del código (`PhoneVerificationSenderPort`, por `VERIFICATION_SENDER`):
+Envío del código (un puerto, `PhoneVerificationSenderPort`; `VERIFICATION_SENDER` es el canal por defecto y
+`VERIFICATION_ENABLED_CHANNELS` la lista de canales disponibles):
 
-| Modo | Comportamiento |
+| `VERIFICATION_SENDER` | Comportamiento |
 |---|---|
-| `disabled` (por defecto) | No envía; pedir un código responde 503 `VERIFICATION_UNAVAILABLE` sin crear nada |
-| `log` | Escribe el código en un log INFO (`Verification code (VERIFICATION_SENDER=log) tenantId=… verificationId=… code=…`) para probar en dev. **Solo con `APP_ENV=dev`**: con otro valor o sin `APP_ENV` el servicio no arranca |
-| `whatsapp` | Aún no implementado (llega con la plantilla de Meta): responde 503 `VERIFICATION_UNAVAILABLE` |
+| `disabled` (por defecto) | No envía; pedir un código responde 503 `VERIFICATION_UNAVAILABLE` sin crear nada. `VERIFICATION_ENABLED_CHANNELS` se ignora |
+| `log` | Reemplaza a todos los canales habilitados (sin credenciales): escribe el canal pedido y el código en un log INFO (`Verification code (VERIFICATION_SENDER=log) tenantId=… verificationId=… channel=sms code=…`). Sin `VERIFICATION_ENABLED_CHANNELS` simula `whatsapp,sms`; el primero es el de por defecto. **Solo con `APP_ENV=dev`**: con otro valor (p. ej. `prod`) o sin `APP_ENV` el servicio no arranca |
+| `whatsapp` / `sms` | Canal por defecto. `VERIFICATION_ENABLED_CHANNELS` vacía = solo ese canal; si se define, debe incluirlo |
 
-Privacidad: los logs nunca llevan el teléfono, el nombre, el código (fuera del modo `log`), el hash, la IP
-ni el `verificationId` junto al teléfono; solo `tenantId`, resultados y conteos. Commands, requests y
-modelos con esos datos sobrescriben `toString`. `EnrollmentFlowIT` y `EnrollmentLogSenderIT` lo verifican.
+El servicio **no arranca** (fail fast) si `VERIFICATION_SENDER` o un canal de `VERIFICATION_ENABLED_CHANNELS` es
+desconocido, si el canal por defecto no está en la lista, si a un canal habilitado le faltan credenciales
+(el mensaje nombra las variables, nunca sus valores) o si una variable de proveedor está mal formada.
 
-Pendiente: adaptador real de WhatsApp (plantilla de autenticación de Meta, secreto `whatsapp-api-token`);
+WhatsApp (Cloud API de Meta, `WhatsAppPhoneVerificationSender`):
+- `POST https://graph.facebook.com/{WHATSAPP_GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages` con
+  `Authorization: Bearer {WHATSAPP_ACCESS_TOKEN}` y la plantilla de autenticación con botón de copiar código
+  (`WHATSAPP_TEMPLATE_NAME`, idioma `WHATSAPP_TEMPLATE_LANGUAGE`). El código va dos veces, como pide Meta: en el
+  parámetro del body y en el del botón (`sub_type: "url"`, `index: "0"`):
+  ```json
+  {"messaging_product": "whatsapp", "recipient_type": "individual", "to": "+525512345678", "type": "template",
+   "template": {"name": "yiupi_codigo_verificacion", "language": {"code": "es_MX"}, "components": [
+     {"type": "body", "parameters": [{"type": "text", "text": "042137"}]},
+     {"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": "042137"}]}]}}
+  ```
+- Tope `WHATSAPP_TIMEOUT_MS` por intento (conexión: mínimo entre ese tope y 3 s). **Un solo reintento, y solo si
+  no se pudo conectar** (conexión rechazada, tiempo de conexión agotado, DNS). Un tiempo agotado después de
+  conectar o cualquier respuesta HTTP nunca se reintenta (el mensaje pudo haber salido).
+- Error `131026` → 400 `RECIPIENT_UNREACHABLE`; 401/403 o error `190` → log ERROR "Authentication to WhatsApp
+  Cloud API was rejected"; otros 4xx → log ERROR; 429/5xx → WARN. Todos menos 131026 → 503.
+- Una respuesta 2xx solo significa que Meta aceptó el mensaje. En la práctica Meta suele informar 131026 de
+  forma asíncrona (webhook de estados), no en la respuesta del envío; esos casos no se ven aquí.
+
+SMS (Twilio Programmable Messaging, `TwilioSmsPhoneVerificationSender`; **no** Twilio Verify: el código se
+genera y valida en este servicio):
+- `POST https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json`, formulario
+  `application/x-www-form-urlencoded`, autenticación básica `TWILIO_ACCOUNT_SID:TWILIO_AUTH_TOKEN`; campos
+  `To` (E.164), `MessagingServiceSid` (`TWILIO_MESSAGING_SERVICE_SID`, preferido) o `From` (`TWILIO_FROM`, E.164)
+  y `Body`.
+- Texto sin acentos ni enlaces, en un solo segmento GSM-7 (≤ 160 caracteres):
+  `Cafe Luna: tu codigo es 042137. Vence en 10 min. No lo compartas.` El nombre del negocio se translitera a
+  ASCII ("Café" → "Cafe"), se filtra a letras, números y espacios y se recorta a 30 caracteres; si queda
+  vacío: `Tu codigo es …`.
+- Un solo intento con tope `TWILIO_TIMEOUT_MS`, **sin reintentos automáticos** (para no duplicar mensajes).
+- Error `21211` → 400 `RECIPIENT_UNREACHABLE`; 401/403 o error `20003` → log ERROR "Authentication to Twilio
+  was rejected"; otros 4xx → log ERROR; 429/5xx → WARN. Todos menos 21211 → 503.
+- **Un 201 de Twilio solo significa que aceptó el mensaje (`queued`/`accepted`), no que se entregó.** El
+  seguimiento de la entrega (`StatusCallback`) no está implementado.
+
+Privacidad: los logs nunca llevan el teléfono (ni enmascarado), el nombre, el código (fuera del modo `log`), el
+hash, la IP, el texto del SMS ni los tokens de los proveedores. Para correlacionar un fallo: `tenantId`,
+`verificationId`, `channel`, estado HTTP y el código numérico de error del proveedor (`providerCode`), más el
+`sid` del mensaje de Twilio. Commands, requests, payloads y propiedades con esos datos sobrescriben `toString`.
+`EnrollmentFlowIT`, `EnrollmentLogSenderIT` y las pruebas de contrato de los adaptadores lo verifican.
+
+Pendiente: seguimiento de entrega (webhooks de estados de Meta y `StatusCallback` de Twilio);
 limpieza periódica de `phone_verifications` vencidas y de `enroll_rate_limits` (y `activation_attempts`,
 `login_attempts`) con ventana vencida; Google Wallet (`google` en `null`).
 
@@ -336,8 +392,22 @@ Los WebP de prueba (`src/test/resources/images`) se generaron con `cwebp`: el JD
 | `OUTBOX_PUBLISH_AUDIENCE` | Audiencia del ID token de Cloud Scheduler (la que envía el job). Dev: `https://loyalty-service-g42hkr2xmq-uk.a.run.app` | vacía (`/internal` cerrado) |
 | `OUTBOX_PUBLISH_ALLOWED_EMAILS` | Correos permitidos en `/internal`, separados por comas. Dev: `sa-scheduler@axioma-loyalty-dev.iam.gserviceaccount.com` | vacía (`/internal` cerrado) |
 | `OTP_HASH_SALT` | Llave del HMAC de los códigos, 32+ bytes (Secret Manager: `otp-hmac-salt`). Sin ella pedir un código o la tarjeta responde 503 `VERIFICATION_UNAVAILABLE` | vacía |
-| `VERIFICATION_SENDER` | Envío del código: `disabled`, `log` (solo con `APP_ENV=dev`) o `whatsapp` (aún no implementado). Otro valor: no arranca | `disabled` |
+| `VERIFICATION_SENDER` | Canal por defecto del código: `disabled`, `log` (solo con `APP_ENV=dev`), `whatsapp` o `sms`. Otro valor: no arranca | `disabled` |
+| `VERIFICATION_ENABLED_CHANNELS` | Canales disponibles, separados por comas (`whatsapp,sms`); el orden es el de `availableChannels`. Debe incluir el de `VERIFICATION_SENDER`. Canal desconocido: no arranca | vacía (solo el de `VERIFICATION_SENDER`; con `log`, ambos) |
 | `APP_ENV` | Ambiente. Solo `dev` permite `VERIFICATION_SENDER=log` | vacía |
+| `WHATSAPP_ACCESS_TOKEN` | **Secreto** (Secret Manager). Token de la app de Meta para la Cloud API. Obligatorio si `whatsapp` está habilitado | vacía |
+| `WHATSAPP_PHONE_NUMBER_ID` | Id numérico del número de WhatsApp Business que envía. Obligatorio si `whatsapp` está habilitado | vacía |
+| `WHATSAPP_TEMPLATE_NAME` | Plantilla de autenticación aprobada por Meta (minúsculas, números y `_`) | `yiupi_codigo_verificacion` |
+| `WHATSAPP_TEMPLATE_LANGUAGE` | Idioma de la plantilla (`es`, `es_MX`) | `es_MX` |
+| `WHATSAPP_GRAPH_API_VERSION` | Versión de la Graph API (`vNN.N`) | `v26.0` |
+| `WHATSAPP_TIMEOUT_MS` | Tope de cada intento (1–30000); un reintento solo si no hubo conexión | 5000 |
+| `WHATSAPP_API_BASE_URL` | Base de la Graph API (solo para pruebas) | `https://graph.facebook.com` |
+| `TWILIO_ACCOUNT_SID` | Cuenta de Twilio (`AC` + 32 hex). Obligatoria si `sms` está habilitado | vacía |
+| `TWILIO_AUTH_TOKEN` | **Secreto** (Secret Manager). Auth token de la cuenta. Obligatorio si `sms` está habilitado | vacía |
+| `TWILIO_MESSAGING_SERVICE_SID` | Messaging Service (`MG` + 32 hex), remitente preferido. Con `sms` habilitado se necesita este o `TWILIO_FROM` | vacía |
+| `TWILIO_FROM` | Número remitente en E.164; solo se usa sin `TWILIO_MESSAGING_SERVICE_SID` | vacía |
+| `TWILIO_TIMEOUT_MS` | Tope del único intento (1–30000); sin reintentos | 5000 |
+| `TWILIO_API_BASE_URL` | Base de la API de Twilio (solo para pruebas) | `https://api.twilio.com` |
 | `ENROLL_PHONE_LIMIT_PER_HOUR` | Códigos por (negocio, teléfono) en la última hora | 3 |
 | `ENROLL_IP_LIMIT_PER_HOUR` | Solicitudes de código por IP por hora | 10 |
 | `ENROLL_TENANT_LIMIT_PER_HOUR` | Solicitudes de código por negocio por hora | 60 |
@@ -363,11 +433,14 @@ la imagen, la sube a Artifact Registry y despliega en Cloud Run (dev) con Worklo
 Variables del repo: `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOYER_SA`
 (salen de `terraform output` en `loyalty-infra`), y `ADMIN_AUDIENCE`, `ADMIN_ALLOWED_EMAILS`, `APP_WEB_BASE_URL`,
 `PUBSUB_TOPIC`, `OUTBOX_BATCH_SIZE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_FAST_PATH_TIMEOUT_MS`, `OUTBOX_PUBLISH_AUDIENCE`,
-`OUTBOX_PUBLISH_ALLOWED_EMAILS`, `VERIFICATION_SENDER`, `APP_ENV`, `WALLET_SERVICE_URL`, `WALLET_SERVICE_AUDIENCE`,
-`WALLET_ISSUE_TIMEOUT_MS` y `ENROLL_*` (se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
+`OUTBOX_PUBLISH_ALLOWED_EMAILS`, `VERIFICATION_SENDER`, `VERIFICATION_ENABLED_CHANNELS`, `APP_ENV`, los `WHATSAPP_*` y
+`TWILIO_*` que no son secretos, `WALLET_SERVICE_URL`, `WALLET_SERVICE_AUDIENCE`, `WALLET_ISSUE_TIMEOUT_MS` y `ENROLL_*`
+(se pasan a Cloud Run como variables de entorno; no son secretos). Una variable
 numérica sin definir llega vacía y toma su valor por defecto. Secretos de Secret Manager: `DATABASE_URL`
 (`neon-database-url`), `JWT_SIGNING_KEY` (`jwt-signing-key`) y `OTP_HASH_SALT` (`otp-hmac-salt`); cada uno necesita
-al menos una versión o el despliegue falla.
+al menos una versión o el despliegue falla. `WHATSAPP_ACCESS_TOKEN` y `TWILIO_AUTH_TOKEN` también van en Secret
+Manager; se cablean aparte en `loyalty-infra` y en el despliegue antes de habilitar `whatsapp` o `sms` (sin ellos,
+con el canal habilitado, el servicio no arranca).
 
 ## Estructura
 ```

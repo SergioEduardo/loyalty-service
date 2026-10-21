@@ -69,7 +69,24 @@ app:
     max-attempts: ${ENROLL_MAX_ATTEMPTS:5}
     otp-hash-salt: ${OTP_HASH_SALT:}
     verification-sender: ${VERIFICATION_SENDER:disabled}
+    verification-enabled-channels: ${VERIFICATION_ENABLED_CHANNELS:}
     app-env: ${APP_ENV:}
+  verification:
+    whatsapp:
+      access-token: ${WHATSAPP_ACCESS_TOKEN:}
+      phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+      template-name: ${WHATSAPP_TEMPLATE_NAME:}
+      template-language: ${WHATSAPP_TEMPLATE_LANGUAGE:}
+      graph-api-version: ${WHATSAPP_GRAPH_API_VERSION:}
+      timeout-ms: ${WHATSAPP_TIMEOUT_MS:}
+      api-base-url: ${WHATSAPP_API_BASE_URL:}
+    twilio:
+      account-sid: ${TWILIO_ACCOUNT_SID:}
+      auth-token: ${TWILIO_AUTH_TOKEN:}
+      messaging-service-sid: ${TWILIO_MESSAGING_SERVICE_SID:}
+      from: ${TWILIO_FROM:}
+      timeout-ms: ${TWILIO_TIMEOUT_MS:}
+      api-base-url: ${TWILIO_API_BASE_URL:}
   wallet:
     service-url: ${WALLET_SERVICE_URL:}
     audience: ${WALLET_SERVICE_AUDIENCE:}

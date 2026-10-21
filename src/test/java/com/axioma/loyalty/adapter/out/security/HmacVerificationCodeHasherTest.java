@@ -16,7 +16,7 @@ class HmacVerificationCodeHasherTest {
     private static final PhoneE164 PHONE = new PhoneE164("+525512345678");
 
     private static EnrollProperties properties(String salt) {
-        return new EnrollProperties(null, null, null, null, null, null, salt, null, null);
+        return new EnrollProperties(null, null, null, null, null, null, salt, null, null, null);
     }
 
     private final HmacVerificationCodeHasher hasher =

@@ -36,7 +36,7 @@ class EnrollCardValidatorTest {
     @ValueSource(strings = {"", " ", "123", "abc", "+52 55", "+999 1234 5678", "55123456789012345678901234567890123456789"})
     void rejectsInvalidPhones(String raw) {
         StepVerifier.create(new RequestPhoneVerificationValidator()
-                        .validate(new RequestPhoneVerificationCommand("mi-cafe", raw, null)))
+                        .validate(new RequestPhoneVerificationCommand("mi-cafe", raw, null, null)))
                 .expectErrorSatisfies(hasCode(ErrorCode.INVALID_PHONE)).verify();
     }
 
@@ -90,7 +90,7 @@ class EnrollCardValidatorTest {
         assertThat(new EnrollCardCommand("mi-cafe", "5512345678", "Ana", ID, "123456", "10.0.0.1").toString())
                 .doesNotContain("5512345678").doesNotContain("Ana").doesNotContain("123456")
                 .doesNotContain(ID).doesNotContain("10.0.0.1");
-        assertThat(new RequestPhoneVerificationCommand("mi-cafe", "5512345678", "10.0.0.1").toString())
+        assertThat(new RequestPhoneVerificationCommand("mi-cafe", "5512345678", "sms", "10.0.0.1").toString())
                 .doesNotContain("5512345678").doesNotContain("10.0.0.1");
     }
 }
